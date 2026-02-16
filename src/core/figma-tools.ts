@@ -1977,12 +1977,59 @@ export function registerFigmaAPITools(
 								});
 							} else {
 								// format === 'full'
-								// Check if we need to auto-summarize
+								// Apply verbosity filtering to reduce payload before token check
+								const effectiveVerbosity = verbosity || "summary";
+								if (effectiveVerbosity !== "full") {
+									responseData.variables = responseData.variables.map((v: any) => {
+										if (effectiveVerbosity === "inventory") {
+											return {
+												id: v.id,
+												name: v.name,
+												collectionId: v.variableCollectionId,
+											};
+										}
+										if (effectiveVerbosity === "summary") {
+											return {
+												id: v.id,
+												name: v.name,
+												resolvedType: v.resolvedType,
+												valuesByMode: v.valuesByMode,
+												variableCollectionId: v.variableCollectionId,
+											};
+										}
+										// standard: drop internal/rarely-needed fields
+										const { remote, hiddenFromPublishing, codeSyntax, ...rest } = v;
+										return rest;
+									});
+									responseData.variableCollections = responseData.variableCollections.map((c: any) => {
+										if (effectiveVerbosity === "inventory") {
+											return {
+												id: c.id,
+												name: c.name,
+												modeNames: c.modes?.map((m: any) => m.name) || [],
+											};
+										}
+										if (effectiveVerbosity === "summary") {
+											return {
+												id: c.id,
+												name: c.name,
+												modes: c.modes,
+											};
+										}
+										return c; // standard
+									});
+									logger.info(
+										{ fileKey, verbosity: effectiveVerbosity },
+										'Applied verbosity filtering to full format Desktop data'
+									);
+								}
+
+								// Check if we still need to auto-summarize after verbosity filtering
 								const estimatedTokens = estimateTokens(responseData);
 								if (estimatedTokens > 25000) {
 									logger.warn(
-										{ fileKey, estimatedTokens },
-										'Full data exceeds MCP token limit (25K), auto-summarizing. Use format=summary or format=filtered to get specific data.'
+										{ fileKey, estimatedTokens, verbosity: effectiveVerbosity },
+										'Full data exceeds MCP token limit (25K) even after verbosity filtering, auto-summarizing.'
 									);
 									const summary = generateSummary(responseData);
 									return {
@@ -1995,6 +2042,7 @@ export function registerFigmaAPITools(
 														source: 'desktop_connection_auto_summarized',
 														warning: 'Full dataset exceeds MCP token limit (25,000 tokens)',
 														suggestion: 'Use format="summary" for overview or format="filtered" with collection/namePattern/mode filters to get specific variables',
+														verbosityApplied: effectiveVerbosity,
 														estimatedTokens,
 														summary,
 													}
