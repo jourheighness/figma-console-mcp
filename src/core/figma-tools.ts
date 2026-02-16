@@ -43,7 +43,7 @@ function isCacheValid(timestamp: number, ttlMs: number = CACHE_TTL_MS): boolean 
  * Rough token estimation for response size checking
  * Approximation: 1 token ≈ 4 characters for JSON
  */
-function estimateTokens(data: any): number {
+export function estimateTokens(data: any): number {
 	const jsonString = JSON.stringify(data);
 	return Math.ceil(jsonString.length / 4);
 }
@@ -278,7 +278,7 @@ function adaptiveVerbosity(
  * Generate compact summary of variables data (~2K tokens)
  * Returns high-level overview with counts and names
  */
-function generateSummary(data: any): any {
+export function generateSummary(data: any): any {
 	const summary = {
 		fileKey: data.fileKey,
 		timestamp: data.timestamp,
@@ -315,7 +315,7 @@ function generateSummary(data: any): any {
 /**
  * Apply filters to variables data
  */
-function applyFilters(
+export function applyFilters(
 	data: any,
 	filters: {
 		collection?: string;
@@ -731,7 +731,7 @@ export function registerFigmaAPITools(
 	// - figma_get_file_for_plugin: For plugin development
 	server.tool(
 		"figma_get_file_data",
-		"Get full file structure and document tree. WARNING: Can consume large amounts of tokens. NOT recommended for component descriptions (use figma_get_component instead). Best for understanding file structure or finding component nodeIds. Start with verbosity='summary' and depth=1 for initial exploration.",
+		"Get full file structure and document tree. WARNING: Can consume large amounts of tokens. NOT recommended for component descriptions (use figma_get_component instead). Best for understanding file structure or finding component nodeIds. Start with verbosity='summary' and depth=1 for initial exploration. Batch-compatible.",
 		{
 			fileUrl: z
 				.string()
@@ -807,6 +807,52 @@ export function registerFigmaAPITools(
 					ids: nodeIds,
 				});
 
+				// Walk document tree to find parent and siblings for a target node
+				const findNodeContext = (root: any, targetId: string): any | null => {
+					if (!root || !root.children) return null;
+					for (const child of root.children) {
+						if (child.id === targetId) {
+							const siblings = root.children;
+							const childNode = child;
+							const childrenSummary = childNode.children
+								? {
+									count: childNode.children.length,
+									items: childNode.children.slice(0, 5).map((c: any) => ({
+										id: c.id, name: c.name, type: c.type,
+									})),
+									...(childNode.children.length > 5 && { truncated: true }),
+								}
+								: undefined;
+							return {
+								parent: { id: root.id, name: root.name, type: root.type },
+								siblingCount: siblings.length,
+								...(childrenSummary && { childrenSummary }),
+							};
+						}
+						const found = findNodeContext(child, targetId);
+						if (found) return found;
+					}
+					return null;
+				};
+
+				// Strip fields that are rarely useful and add noise at full verbosity
+				const STRIP_FIELDS = new Set([
+					"relativeTransform", "absoluteRenderBounds", "overriddenFields",
+				]);
+				const stripUnnecessaryFields = (node: any): any => {
+					if (!node || typeof node !== "object") return node;
+					const cleaned: any = {};
+					for (const key of Object.keys(node)) {
+						if (STRIP_FIELDS.has(key)) continue;
+						if (key === "children" && Array.isArray(node.children)) {
+							cleaned.children = node.children.map((child: any) => stripUnnecessaryFields(child));
+						} else {
+							cleaned[key] = node[key];
+						}
+					}
+					return cleaned;
+				};
+
 				// Apply verbosity filtering to reduce payload size
 				const filterNode = (node: any, level: "summary" | "standard" | "full"): any => {
 					if (!node) return node;
@@ -824,7 +870,7 @@ export function registerFigmaAPITools(
 					}
 
 					if (level === "standard") {
-						// Standard: Essential properties for plugin development (~50% reduction)
+						// Standard: Essential properties for development (~50% reduction)
 						const filtered: any = {
 							id: node.id,
 							name: node.name,
@@ -837,11 +883,24 @@ export function registerFigmaAPITools(
 						if (node.absoluteBoundingBox) filtered.absoluteBoundingBox = node.absoluteBoundingBox;
 						if (node.size) filtered.size = node.size;
 
-						// Include component/instance info for plugin work
+						// Text content
+						if (node.characters) filtered.characters = node.characters;
+
+						// Auto-layout properties
+						if (node.layoutMode) filtered.layoutMode = node.layoutMode;
+						if (node.itemSpacing != null) filtered.itemSpacing = node.itemSpacing;
+						if (node.paddingLeft != null) filtered.paddingLeft = node.paddingLeft;
+						if (node.paddingRight != null) filtered.paddingRight = node.paddingRight;
+						if (node.paddingTop != null) filtered.paddingTop = node.paddingTop;
+						if (node.paddingBottom != null) filtered.paddingBottom = node.paddingBottom;
+
+						// Component/instance info
 						if (node.componentId) filtered.componentId = node.componentId;
 						if (node.componentPropertyReferences) filtered.componentPropertyReferences = node.componentPropertyReferences;
+						if (node.componentProperties) filtered.componentProperties = node.componentProperties;
+						if (node.variantProperties) filtered.variantProperties = node.variantProperties;
 
-						// Include basic styling (but not full details)
+						// Styling essentials
 						if (node.fills && node.fills.length > 0) {
 							filtered.fills = node.fills.map((fill: any) => ({
 								type: fill.type,
@@ -849,10 +908,12 @@ export function registerFigmaAPITools(
 								...(fill.color && { color: fill.color }),
 							}));
 						}
-
-						// Include plugin data if present
-						if (node.pluginData) filtered.pluginData = node.pluginData;
-						if (node.sharedPluginData) filtered.sharedPluginData = node.sharedPluginData;
+						if (node.strokes && node.strokes.length > 0) filtered.strokes = node.strokes;
+						if (node.strokeWeight) filtered.strokeWeight = node.strokeWeight;
+						if (node.cornerRadius) filtered.cornerRadius = node.cornerRadius;
+						if (node.effects && node.effects.length > 0) filtered.effects = node.effects;
+						if (node.opacity != null && node.opacity !== 1) filtered.opacity = node.opacity;
+						if (node.clipsContent != null) filtered.clipsContent = node.clipsContent;
 
 						// Recursively filter children
 						if (node.children) {
@@ -862,8 +923,8 @@ export function registerFigmaAPITools(
 						return filtered;
 					}
 
-					// Full: Return everything
-					return node;
+					// Full: Strip unnecessary fields but keep everything else
+					return stripUnnecessaryFields(node);
 				};
 
 				const filteredDocument = verbosity !== "full"
@@ -888,6 +949,14 @@ export function registerFigmaAPITools(
 						nodes: fileData.nodes,
 					}),
 				};
+
+				// Add preemptive node context for single-node requests
+				if (nodeIds && nodeIds.length === 1) {
+					const ctx = findNodeContext(fileData.document, nodeIds[0]);
+					if (ctx) {
+						response.nodeContext = ctx;
+					}
+				}
 
 				// Apply enrichment if requested
 				if (enrich) {
@@ -1014,10 +1083,9 @@ export function registerFigmaAPITools(
 			format: z
 				.enum(["summary", "filtered", "full"])
 				.optional()
-				.default("full")
+				.default("summary")
 				.describe(
-					"Response format: 'summary' (~2K tokens with overview and names only), 'filtered' (apply collection/name/mode filters), 'full' (complete dataset from cache or fetch). " +
-					"Summary is recommended for initial exploration. Full format returns all data but may be auto-summarized if >25K tokens. Default: full"
+					"Response format: 'summary' (~2K tokens — recommended for exploration), 'filtered' (apply collection/name/mode params for specific data), 'full' (complete dataset, may be auto-compressed if >25K tokens). Default: summary"
 				),
 			collection: z
 				.string()
@@ -2343,8 +2411,8 @@ export function registerFigmaAPITools(
 
 	// Tool 10: Get Component Data
 	const componentDescription = isRemoteMode
-		? "Get component metadata or reconstruction specification. Two export formats: (1) 'metadata' (default) - comprehensive documentation with properties, variants, and design tokens for style guides and references, (2) 'reconstruction' - node tree specification compatible with Figma Component Reconstructor plugin for programmatic component creation."
-		: "Get component metadata or reconstruction specification. Two export formats: (1) 'metadata' (default) - comprehensive documentation with properties, variants, and design tokens for style guides and references, (2) 'reconstruction' - node tree specification compatible with Figma Component Reconstructor plugin for programmatic component creation. IMPORTANT: For local/unpublished components with metadata format, ensure the Figma Desktop Bridge plugin is running (Right-click in Figma → Plugins → Development → Figma Desktop Bridge) to get complete description data.";
+		? "Get component metadata or reconstruction specification. Two export formats: (1) 'metadata' (default) - comprehensive documentation with properties, variants, and design tokens for style guides and references, (2) 'reconstruction' - node tree specification compatible with Figma Component Reconstructor plugin for programmatic component creation. Batch-compatible."
+		: "Get component metadata or reconstruction specification. Two export formats: (1) 'metadata' (default) - comprehensive documentation with properties, variants, and design tokens for style guides and references, (2) 'reconstruction' - node tree specification compatible with Figma Component Reconstructor plugin for programmatic component creation. IMPORTANT: For local/unpublished components with metadata format, ensure the Figma Desktop Bridge plugin is running (Right-click in Figma → Plugins → Development → Figma Desktop Bridge) to get complete description data. Batch-compatible.";
 	server.tool(
 		"figma_get_component",
 		componentDescription,
@@ -2645,7 +2713,7 @@ export function registerFigmaAPITools(
 	// Tool 11: Get Styles
 	server.tool(
 		"figma_get_styles",
-		"Get all styles (color, text, effects, grids) from a Figma file with optional code exports. Use when user asks for: text styles, color palette, design system styles, typography, or style documentation. Returns organized style definitions with resolved values. NOT for design tokens/variables (use figma_get_variables). Set enrich=true for CSS/Tailwind/Sass code examples. Supports verbosity control to manage payload size.",
+		"Get all styles (color, text, effects, grids) from a Figma file with optional code exports. Use when user asks for: text styles, color palette, design system styles, typography, or style documentation. Returns organized style definitions with resolved values. NOT for design tokens/variables (use figma_get_variables). Set enrich=true for CSS/Tailwind/Sass code examples. Supports verbosity control to manage payload size. Batch-compatible.",
 		{
 			fileUrl: z
 				.string()
@@ -2848,13 +2916,13 @@ export function registerFigmaAPITools(
 				.min(0.01)
 				.max(4)
 				.optional()
-				.default(2)
-				.describe("Image scale factor (0.01-4, default: 2 for high quality)"),
+				.default(1)
+				.describe("Image scale factor (0.01-4, default: 1). Use 2 for higher resolution when inspecting fine details."),
 			format: z
 				.enum(["png", "jpg", "svg", "pdf"])
 				.optional()
-				.default("png")
-				.describe("Image format (default: png)"),
+				.default("jpg")
+				.describe("Image format (default: jpg for smaller payloads). Use png for transparency or pixel precision."),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, nodeId, scale, format }) => {
@@ -3402,15 +3470,15 @@ export function registerFigmaAPITools(
 			format: z
 				.enum(["PNG", "JPG", "SVG"])
 				.optional()
-				.default("PNG")
-				.describe("Image format (default: PNG)"),
+				.default("JPG")
+				.describe("Image format (default: JPG for smaller payloads). Use PNG when transparency or pixel-perfect precision matters."),
 			scale: z
 				.number()
 				.min(0.5)
 				.max(4)
 				.optional()
-				.default(2)
-				.describe("Scale factor (default: 2 for 2x resolution)"),
+				.default(1)
+				.describe("Scale factor (default: 1). Use 2 for higher resolution when inspecting fine details."),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async ({ nodeId, format, scale }) => {

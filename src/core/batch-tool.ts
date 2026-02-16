@@ -44,7 +44,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export function registerBatchTool(server: McpServer): void {
 	server.tool(
 		"figma_batch",
-		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Best for combining lightweight data reads like figma_get_file_data, figma_get_variables, figma_get_styles, and figma_get_component_keys. Screenshot and image tools (figma_take_screenshot, figma_get_component_image, figma_capture_screenshot) return large payloads that can overflow batch responses — call those as standalone requests instead.",
+		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Recommended batch-friendly tools: figma_get_file_data, figma_get_variables, figma_get_styles, figma_get_component, figma_get_component_keys, figma_get_selection, figma_get_library_components. Screenshot and image tools (figma_take_screenshot, figma_get_component_image, figma_capture_screenshot) return large payloads that can overflow batch responses — call those as standalone requests instead.",
 		{
 			operations: z
 				.array(

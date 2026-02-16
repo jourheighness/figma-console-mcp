@@ -676,13 +676,13 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.min(0.01)
 					.max(4)
 					.optional()
-					.default(2)
-					.describe("Image scale factor (0.01-4, default: 2 for high quality)"),
+					.default(1)
+					.describe("Image scale factor (0.01-4, default: 1). Use 2 for higher resolution when inspecting fine details."),
 				format: z
 					.enum(["png", "jpg", "svg", "pdf"])
 					.optional()
-					.default("png")
-					.describe("Image format (default: png)"),
+					.default("jpg")
+					.describe("Image format (default: jpg for smaller payloads). Use png for transparency or pixel precision."),
 			},
 			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ nodeId, scale, format }) => {
