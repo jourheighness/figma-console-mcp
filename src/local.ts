@@ -40,6 +40,7 @@ import { registerBatchTool } from "./core/batch-tool.js";
 import { registerCommentTools } from "./core/comment-tools.js";
 import { SessionCache, CachedFigmaAPI } from "./core/session-cache.js";
 import { ProjectContextCache } from "./core/project-context.js";
+import { TeamLibraryCache } from "./core/team-library.js";
 import { registerContextResources } from "./core/context-resources.js";
 import { FigmaDesktopConnector } from "./core/figma-desktop-connector.js";
 import type { IFigmaConnector } from "./core/figma-connector.js";
@@ -91,6 +92,10 @@ class LocalFigmaConsoleMCP {
 	private sessionCache = new SessionCache();
 	// Disk-persistent project context cache (Layer 1) — survives server restarts
 	private projectContextCache = new ProjectContextCache();
+	// Team library cache — team-wide published component/style catalog
+	private teamLibraryCache = new TeamLibraryCache();
+	// Team IDs from FIGMA_TEAM_ID env var (comma-separated)
+	private teamIds: string[] = [];
 
 	constructor() {
 		this.server = new McpServer(
@@ -115,10 +120,13 @@ class LocalFigmaConsoleMCP {
 - **Multi-tool efficiency**: figma_batch (run up to 10 tools in one request)
 - **Variable mutations**: figma_batch_create_variables / figma_batch_update_variables (bulk ops, 10-50x faster)
 - **Component instantiation**: figma_instantiate_component (place component instances)
+- **Team library**: figma_get_library_components (search published design system by name — requires FIGMA_TEAM_ID)
 
 ### Critical Gotchas
 - NodeIds are session-specific — never reuse IDs from a previous conversation; always re-fetch with figma_search_components or figma_get_file_data
 - Start with verbosity='summary' for figma_get_variables and figma_get_file_data to avoid token exhaustion
+- figma_get_component_details defaults to scope='properties' (compact ~200 bytes). scope='full' returns complete node trees (~35KB each) — suited for documentation, not batch operations
+- Screenshot tools (figma_take_screenshot, figma_get_component_image, figma_capture_screenshot) return large payloads — call them as standalone requests, not inside figma_batch
 - figma_get_variables requires a Figma Enterprise plan
 - Component instances expose properties (TEXT, BOOLEAN, VARIANT, INSTANCE_SWAP) — use figma_set_instance_properties instead of editing text nodes directly
 - After creating/modifying visual elements, ALWAYS take a screenshot to verify the result
@@ -655,7 +663,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 		// Note: For screenshots of specific components, use figma_get_component_image instead
 		this.server.tool(
 			"figma_take_screenshot",
-			`Export an image of the current Figma page or specific node via REST API. Returns an image URL (valid 30 days). Use for visual validation after design changes — check alignment, spacing, proportions. Pass nodeId to target specific elements. For components, prefer figma_get_component_image.`,
+			`Export an image of the current Figma page or specific node via REST API. Returns an image URL (valid 30 days). Use for visual validation after design changes — check alignment, spacing, proportions. Pass nodeId to target specific elements. For components, prefer figma_get_component_image. Call as a standalone request rather than inside figma_batch, since image responses are large.`,
 			{
 				nodeId: z
 					.string()
@@ -3476,7 +3484,7 @@ return {
 		// Tool 3: Get Component Details (~500 tokens per component)
 		this.server.tool(
 			"figma_get_component_details",
-			"Get full details for a specific component including all variants, properties, and keys needed for instantiation. Use the component key or name from figma_search_components.",
+			"Get details for a specific component. With scope='properties' (default), returns only property definitions, variant axes, key, and name — compact and sufficient for build preparation. With scope='full', returns the complete component spec including node trees, design tokens, and all metadata — suited for documentation or deep inspection.",
 			{
 				componentKey: z
 					.string()
@@ -3486,9 +3494,14 @@ return {
 					.string()
 					.optional()
 					.describe("The component name (used if key not provided)"),
+				scope: z
+					.enum(["properties", "full"])
+					.optional()
+					.default("properties")
+					.describe("'properties' (default): only componentPropertyDefinitions, variant axes, key, and name. 'full': complete component spec with node trees, tokens, and all details."),
 			},
 			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-			async ({ componentKey, componentName }) => {
+			async ({ componentKey, componentName, scope }) => {
 				try {
 					if (!componentKey && !componentName) {
 						return {
@@ -3575,21 +3588,64 @@ return {
 						};
 					}
 
+					// Build response based on scope
+					let responseData: any;
+
+					if (scope === 'properties') {
+						// Compact: only property defs, variant axes, key, name
+						if (isComponentSet) {
+							responseData = {
+								success: true,
+								type: 'componentSet',
+								name: component.name,
+								key: component.key,
+								nodeId: component.nodeId,
+								description: component.description,
+								variantAxes: component.variantAxes,
+								variants: component.variants?.map((v: any) => ({
+									name: v.name,
+									key: v.key,
+									properties: v.properties,
+								})),
+								instantiation: {
+									key: component.key,
+									example: `Use figma_instantiate_component with componentKey: "${component.key}"`,
+								},
+							};
+						} else {
+							responseData = {
+								success: true,
+								type: 'component',
+								name: component.name,
+								key: component.key,
+								nodeId: component.nodeId,
+								description: component.description,
+								properties: component.properties,
+								defaultSize: component.defaultSize,
+								instantiation: {
+									key: component.key,
+									example: `Use figma_instantiate_component with componentKey: "${component.key}"`,
+								},
+							};
+						}
+					} else {
+						// Full: everything
+						responseData = {
+							success: true,
+							type: isComponentSet ? "componentSet" : "component",
+							component,
+							instantiation: {
+								key: component.key,
+								example: `Use figma_instantiate_component with componentKey: "${component.key}"`,
+							},
+						};
+					}
+
 					return {
 						content: [
 							{
 								type: "text",
-								text: JSON.stringify(
-									{
-										success: true,
-										type: isComponentSet ? "componentSet" : "component",
-										component,
-										instantiation: {
-											key: component.key,
-											example: `Use figma_instantiate_component with componentKey: "${component.key}"`,
-										},
-									},
-								),
+								text: JSON.stringify(responseData),
 							},
 						],
 					};
@@ -5246,6 +5302,10 @@ return {
 			this.projectContextCache,
 			() => this.getFigmaAPI(),
 			() => this.getCurrentFileUrl(),
+			{
+				teamLibraryCache: this.teamLibraryCache,
+				teamIds: this.teamIds,
+			},
 		);
 
 		// Tool: Force-rebuild project context cache for a file
@@ -5285,6 +5345,16 @@ return {
 					const api = await this.getFigmaAPI();
 					const ctx = await this.projectContextCache.forceRebuild(fileKey, api);
 
+					// Also invalidate team library caches (team libraries may reference this file)
+					const teamLibraryRebuilt: string[] = [];
+					if (this.teamIds.length > 0) {
+						for (const teamId of this.teamIds) {
+							await this.teamLibraryCache.invalidate(teamId);
+							this.teamLibraryCache.build(teamId, api).catch(() => {});
+							teamLibraryRebuilt.push(teamId);
+						}
+					}
+
 					return {
 						content: [{
 							type: "text" as const,
@@ -5303,6 +5373,7 @@ return {
 								componentSets: { total: ctx.componentSets.total, withKeys: Object.keys(ctx.componentSets.keyMap).length },
 								styles: ctx.styles,
 								generatedAt: ctx.generatedAt,
+								...(teamLibraryRebuilt.length > 0 && { teamLibrariesInvalidated: teamLibraryRebuilt }),
 							}),
 						}],
 					};
@@ -5385,6 +5456,98 @@ return {
 								matches: results.length,
 								results: results.slice(0, 50),
 								...(results.length > 50 && { truncated: true, totalMatches: results.length }),
+							}),
+						}],
+					};
+				} catch (error) {
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
+						isError: true,
+					};
+				}
+			},
+		);
+
+		// Tool: Search team design system library by name (instant, from cache)
+		this.server.tool(
+			"figma_get_library_components",
+			"Search the team's published design system library for components, component sets, and styles by name. Returns matching items with keys for instantiation. Instant lookup from cache — no API call. Requires FIGMA_TEAM_ID env var.",
+			{
+				namePattern: z
+					.string()
+					.describe("Search pattern to match names (case-insensitive substring match). E.g. 'Button', 'Color/Primary', 'Heading'."),
+				type: z
+					.enum(["component", "componentSet", "style", "all"])
+					.optional()
+					.default("all")
+					.describe("Filter by type: 'component', 'componentSet', 'style', or 'all' (default)."),
+				teamId: z
+					.string()
+					.optional()
+					.describe("Override team ID. Defaults to FIGMA_TEAM_ID env var."),
+			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+			async ({ namePattern, type, teamId: overrideTeamId }) => {
+				try {
+					const targetTeamIds = overrideTeamId ? [overrideTeamId] : this.teamIds;
+
+					if (targetTeamIds.length === 0) {
+						return {
+							content: [{
+								type: "text" as const,
+								text: JSON.stringify({
+									error: "No team ID configured. Set the FIGMA_TEAM_ID environment variable to your Figma team ID. " +
+										"Find it in the URL when viewing your team page: https://www.figma.com/files/team/{TEAM_ID}/...",
+								}),
+							}],
+							isError: true,
+						};
+					}
+
+					const api = await this.getFigmaAPI();
+					const allResults: Array<{ teamId: string; matches: any[] }> = [];
+
+					for (const tid of targetTeamIds) {
+						// Ensure cache is populated
+						let lib = await this.teamLibraryCache.get(tid, api);
+						if (!lib) {
+							lib = await this.teamLibraryCache.build(tid, api);
+						}
+
+						const matches = this.teamLibraryCache.search(tid, namePattern, type as any);
+						allResults.push({ teamId: tid, matches });
+					}
+
+					// Flatten for single team, nest for multiple
+					if (allResults.length === 1) {
+						const { teamId: tid, matches } = allResults[0];
+						return {
+							content: [{
+								type: "text" as const,
+								text: JSON.stringify({
+									teamId: tid,
+									pattern: namePattern,
+									type,
+									matches: matches.length,
+									results: matches.slice(0, 50),
+									...(matches.length > 50 && { truncated: true, totalMatches: matches.length }),
+								}),
+							}],
+						};
+					}
+
+					return {
+						content: [{
+							type: "text" as const,
+							text: JSON.stringify({
+								pattern: namePattern,
+								type,
+								teams: allResults.map(({ teamId: tid, matches }) => ({
+									teamId: tid,
+									matches: matches.length,
+									results: matches.slice(0, 50),
+									...(matches.length > 50 && { truncated: true, totalMatches: matches.length }),
+								})),
 							}),
 						}],
 					};
@@ -5759,6 +5922,13 @@ return {
 				"Starting Figma Console MCP (Local Mode)",
 			);
 
+			// Parse FIGMA_TEAM_ID env var (comma-separated for multiple teams)
+			const teamIdEnv = process.env.FIGMA_TEAM_ID?.trim();
+			if (teamIdEnv) {
+				this.teamIds = teamIdEnv.split(',').map(id => id.trim()).filter(Boolean);
+				logger.info({ teamIds: this.teamIds }, 'Team IDs configured for library discovery');
+			}
+
 			// Start WebSocket bridge server with port range fallback.
 			// If the preferred port is taken (e.g., Claude Desktop Chat tab already bound it),
 			// try subsequent ports in the range (9223-9232) so multiple instances can coexist.
@@ -5884,6 +6054,21 @@ return {
 			await this.server.connect(transport);
 
 			logger.info("MCP server started successfully on stdio transport");
+
+			// Warm team library caches in background (non-blocking)
+			if (this.teamIds.length > 0) {
+				this.getFigmaAPI()
+					.then((api) => {
+						for (const teamId of this.teamIds) {
+							this.teamLibraryCache.build(teamId, api).catch((err) => {
+								logger.debug({ teamId, error: err instanceof Error ? err.message : String(err) }, 'Failed to warm team library cache');
+							});
+						}
+					})
+					.catch((err) => {
+						logger.debug({ error: err instanceof Error ? err.message : String(err) }, 'Failed to get API for team library warming');
+					});
+			}
 
 			// 🆕 AUTO-CONNECT: Start monitoring immediately if Figma Desktop is available
 			// This enables "get latest logs" workflow without requiring manual setup

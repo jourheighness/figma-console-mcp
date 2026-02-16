@@ -11,6 +11,7 @@
  *   figma://context/{fileKey}/components — component inventory subsection
  *   figma://context/{fileKey}/tokens    — variable collections subsection
  *   figma://context/{fileKey}/styles    — style summary subsection
+ *   figma://context/library            — team design system library catalog
  */
 
 import { writeFile, mkdir } from 'fs/promises';
@@ -20,6 +21,7 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import type { FigmaAPI } from './figma-api.js';
 import { extractFileKey } from './figma-api.js';
 import type { ProjectContextCache, ProjectContext } from './project-context.js';
+import type { TeamLibraryCache } from './team-library.js';
 import { createChildLogger } from './logger.js';
 
 const DIAG_DIR = join(homedir(), '.config', 'figma-console-mcp', 'context');
@@ -56,6 +58,10 @@ export function registerContextResources(
 	contextCache: ProjectContextCache,
 	getFigmaAPI: () => Promise<FigmaAPI>,
 	getCurrentUrl: () => string | null,
+	options?: {
+		teamLibraryCache?: TeamLibraryCache;
+		teamIds?: string[];
+	},
 ): void {
 	// ── Static resource: figma://context/current ─────────────────────────
 	server.registerResource(
@@ -199,6 +205,67 @@ export function registerContextResources(
 			};
 		},
 	);
+
+	// ── Static resource: figma://context/library ────────────────────────
+	if (options?.teamLibraryCache && options?.teamIds?.length) {
+		const teamLibraryCache = options.teamLibraryCache;
+		const teamIds = options.teamIds;
+
+		server.registerResource(
+			'figma-context-library',
+			'figma://context/library',
+			{
+				description: 'Team design system library catalog: published components, component sets, and styles available for use. Use figma_get_library_components to search by name.',
+				mimeType: 'application/json',
+			},
+			async (_uri) => {
+				const summaries: any[] = [];
+
+				for (const teamId of teamIds) {
+					const summary = teamLibraryCache.getCompactSummary(teamId);
+					if (summary) {
+						summaries.push(summary);
+					} else {
+						// Try to build on-demand
+						try {
+							const api = await getFigmaAPI();
+							await teamLibraryCache.build(teamId, api);
+							const built = teamLibraryCache.getCompactSummary(teamId);
+							if (built) summaries.push(built);
+						} catch (err) {
+							summaries.push({
+								teamId,
+								error: `Failed to load team library: ${err instanceof Error ? err.message : String(err)}`,
+							});
+						}
+					}
+				}
+
+				if (summaries.length === 0) {
+					return {
+						contents: [{
+							uri: 'figma://context/library',
+							mimeType: 'application/json',
+							text: JSON.stringify({
+								hint: 'No team library data available. Set FIGMA_TEAM_ID env var to your Figma team ID.',
+							}),
+						}],
+					};
+				}
+
+				// If single team, return directly; if multiple, wrap in array
+				const data = summaries.length === 1 ? summaries[0] : { teams: summaries };
+
+				return {
+					contents: [{
+						uri: 'figma://context/library',
+						mimeType: 'application/json',
+						text: JSON.stringify(data, null, 2),
+					}],
+				};
+			},
+		);
+	}
 
 	logger.info('Registered figma://context/* MCP resources');
 }

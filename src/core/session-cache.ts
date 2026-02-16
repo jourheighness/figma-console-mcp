@@ -273,6 +273,42 @@ export class CachedFigmaAPI extends FigmaAPI {
 		return this.sessionCache.cachedCall(key, () => super.searchComponents(fileKey, searchTerm));
 	}
 
+	// ── Team Library overrides ──────────────────────────────────────────
+
+	override async getTeamComponents(
+		teamId: string,
+		options?: { after?: number; page_size?: number },
+	): Promise<any> {
+		const key = cacheKey('getTeamComponents', teamId, options as Record<string, any>);
+		return this.sessionCache.cachedCall(key, () => super.getTeamComponents(teamId, options));
+	}
+
+	override async getTeamComponentSets(
+		teamId: string,
+		options?: { after?: number; page_size?: number },
+	): Promise<any> {
+		const key = cacheKey('getTeamComponentSets', teamId, options as Record<string, any>);
+		return this.sessionCache.cachedCall(key, () => super.getTeamComponentSets(teamId, options));
+	}
+
+	override async getTeamStyles(
+		teamId: string,
+		options?: { after?: number; page_size?: number },
+	): Promise<any> {
+		const key = cacheKey('getTeamStyles', teamId, options as Record<string, any>);
+		return this.sessionCache.cachedCall(key, () => super.getTeamStyles(teamId, options));
+	}
+
+	override async getComponentByKey(key_: string): Promise<any> {
+		const key = cacheKey('getComponentByKey', key_);
+		return this.sessionCache.cachedCall(key, () => super.getComponentByKey(key_));
+	}
+
+	override async getComponentSetByKey(key_: string): Promise<any> {
+		const key = cacheKey('getComponentSetByKey', key_);
+		return this.sessionCache.cachedCall(key, () => super.getComponentSetByKey(key_));
+	}
+
 	// ── Write methods — NOT overridden, pass through to parent ───────────
 	// postComment, deleteComment, getBranchKey all pass through.
 	// getBranchKey could be cached but involves write-like branch resolution logic.

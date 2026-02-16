@@ -446,7 +446,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 		// Note: For screenshots of specific components, use figma_get_component_image instead
 		this.server.tool(
 			"figma_take_screenshot",
-			"Export an image of the currently viewed Figma page or specific node using Figma's REST API. Returns an image URL (valid for 30 days). For specific components, use figma_get_component_image instead.",
+			"Export an image of the currently viewed Figma page or specific node using Figma's REST API. Returns an image URL (valid for 30 days). For specific components, use figma_get_component_image instead. Call as a standalone request rather than inside figma_batch, since image responses are large.",
 			{
 				nodeId: z
 					.string()

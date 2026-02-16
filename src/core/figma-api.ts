@@ -401,6 +401,94 @@ export class FigmaAPI {
     });
   }
 
+  // ─── Team Library Endpoints ──────────────────────────────────────────
+
+  /**
+   * GET /v1/teams/:team_id/components
+   * Get published components for a team (paginated)
+   */
+  async getTeamComponents(teamId: string, options?: { after?: number; page_size?: number }): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.after !== undefined) params.append('after', String(options.after));
+    if (options?.page_size !== undefined) params.append('page_size', String(options.page_size));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/teams/${teamId}/components${query}`);
+  }
+
+  /**
+   * GET /v1/teams/:team_id/component_sets
+   * Get published component sets for a team (paginated)
+   */
+  async getTeamComponentSets(teamId: string, options?: { after?: number; page_size?: number }): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.after !== undefined) params.append('after', String(options.after));
+    if (options?.page_size !== undefined) params.append('page_size', String(options.page_size));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/teams/${teamId}/component_sets${query}`);
+  }
+
+  /**
+   * GET /v1/teams/:team_id/styles
+   * Get published styles for a team (paginated)
+   */
+  async getTeamStyles(teamId: string, options?: { after?: number; page_size?: number }): Promise<any> {
+    const params = new URLSearchParams();
+    if (options?.after !== undefined) params.append('after', String(options.after));
+    if (options?.page_size !== undefined) params.append('page_size', String(options.page_size));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/teams/${teamId}/styles${query}`);
+  }
+
+  /**
+   * GET /v1/components/:key
+   * Get a component by its unique key
+   */
+  async getComponentByKey(key: string): Promise<any> {
+    return this.request(`/components/${key}`);
+  }
+
+  /**
+   * GET /v1/component_sets/:key
+   * Get a component set by its unique key
+   */
+  async getComponentSetByKey(key: string): Promise<any> {
+    return this.request(`/component_sets/${key}`);
+  }
+
+  /**
+   * Auto-paginate a team endpoint that uses cursor pagination.
+   * Collects all items across all pages.
+   */
+  async fetchAllPages(
+    fetcher: (cursor?: number) => Promise<any>,
+  ): Promise<any[]> {
+    const allItems: any[] = [];
+    let cursor: number | undefined;
+
+    // Safety limit to prevent infinite loops
+    const MAX_PAGES = 50;
+    let page = 0;
+
+    while (page < MAX_PAGES) {
+      const response = await fetcher(cursor);
+      const items = response?.meta?.components
+        ?? response?.meta?.component_sets
+        ?? response?.meta?.styles
+        ?? [];
+      allItems.push(...items);
+
+      // Check for next page cursor
+      const pagination = response?.meta?.cursor;
+      if (!pagination?.after || items.length === 0) {
+        break;
+      }
+      cursor = pagination.after;
+      page++;
+    }
+
+    return allItems;
+  }
+
   /**
    * Helper: Get all design tokens (variables) with formatted output
    * Both local and published can fail gracefully (e.g., 403 without Enterprise plan)
