@@ -44,8 +44,19 @@ export function registerCommentTools(
 				.optional()
 				.default(false)
 				.describe("Include resolved (completed) comment threads. Default: false (only active comments)"),
+			verbose: z
+				.boolean()
+				.optional()
+				.default(false)
+				.describe("Return full comment objects with all metadata. Default: false (compact — id, message, author handle, node_id, created_at only)"),
 		},
-		async ({ fileUrl, as_md = false, include_resolved = false }) => {
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true,
+		},
+		async ({ fileUrl, as_md = false, include_resolved = false, verbose = false }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
@@ -57,6 +68,7 @@ export function registerCommentTools(
 									error: "no_file_url",
 									message:
 										"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode).",
+									ai_instruction: "No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.",
 								}),
 							},
 						],
@@ -91,8 +103,19 @@ export function registerCommentTools(
 					? allComments
 					: allComments.filter((c: any) => !c.resolved_at);
 
+				// When verbose=false, map to compact form (strip full user objects, client_meta details, etc.)
+				const compactComments = verbose
+					? comments
+					: comments.map((c: any) => ({
+						id: c.id,
+						message: c.message,
+						user: c.user?.handle,
+						node_id: c.client_meta?.node_id,
+						created_at: c.created_at,
+					}));
+
 				const result = {
-					comments,
+					comments: compactComments,
 					summary: {
 						total: allComments.length,
 						active: allComments.filter((c: any) => !c.resolved_at).length,
@@ -161,6 +184,12 @@ export function registerCommentTools(
 				.optional()
 				.describe("ID of an existing comment to reply to. Creates a threaded reply instead of a new top-level comment."),
 		},
+		{
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: false,
+			openWorldHint: true,
+		},
 		async ({ fileUrl, message, node_id, x, y, reply_to_comment_id }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
@@ -173,6 +202,7 @@ export function registerCommentTools(
 									error: "no_file_url",
 									message:
 										"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode).",
+									ai_instruction: "No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.",
 								}),
 							},
 						],
@@ -271,6 +301,12 @@ export function registerCommentTools(
 				.string()
 				.describe("The ID of the comment to delete. Get IDs from figma_get_comments."),
 		},
+		{
+			readOnlyHint: false,
+			destructiveHint: true,
+			idempotentHint: true,
+			openWorldHint: true,
+		},
 		async ({ fileUrl, comment_id }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
@@ -283,6 +319,7 @@ export function registerCommentTools(
 									error: "no_file_url",
 									message:
 										"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode).",
+									ai_instruction: "No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.",
 								}),
 							},
 						],

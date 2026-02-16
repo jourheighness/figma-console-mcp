@@ -20,6 +20,7 @@ import { testBrowserRendering } from "./test-browser.js";
 import { FigmaAPI, extractFileKey, formatVariables, formatComponentData } from "./core/figma-api.js";
 import { registerFigmaAPITools } from "./core/figma-tools.js";
 import { registerDesignCodeTools } from "./core/design-code-tools.js";
+import { registerBatchTool } from "./core/batch-tool.js";
 import { registerCommentTools } from "./core/comment-tools.js";
 // Note: MCP Apps (Token Browser, Dashboard) are only available in local mode
 // They require Node.js file system APIs for serving HTML that don't work in Cloudflare Workers
@@ -31,10 +32,37 @@ const logger = createChildLogger({ component: "mcp-server" });
  * Extends McpAgent to provide Figma-specific debugging tools
  */
 export class FigmaConsoleMCPv3 extends McpAgent {
-	server = new McpServer({
-		name: "Figma Console MCP",
-		version: "1.8.0",
-	});
+	server = new McpServer(
+		{
+			name: "Figma Console MCP",
+			version: "1.8.0",
+		},
+		{
+			instructions: `## Figma Console MCP — Tool Selection Guide
+
+### Quick Reference
+- **Debug plugin logs**: figma_get_console_logs (past logs) or figma_watch_console (real-time stream)
+- **Visual inspection**: figma_take_screenshot (page/node image) or figma_get_component_image (component render)
+- **File exploration**: figma_get_file_data (start with verbosity='summary', depth=1)
+- **Design tokens**: figma_get_variables (with filtering: collection, namePattern, mode)
+- **Component details**: figma_get_component (metadata) or figma_get_component_for_development (full dev spec)
+- **Styles**: figma_get_styles (color, text, effect, grid styles)
+- **Comments**: figma_get_comments / figma_post_comment / figma_delete_comment
+- **Design-code sync**: figma_check_design_parity (compare Figma vs code specs)
+- **Multi-tool efficiency**: figma_batch (run up to 10 tools in one request)
+
+### Required Workflow
+1. **Start with figma_navigate** — opens a Figma file and initializes browser monitoring
+2. **Explore** — use figma_get_file_data or figma_get_status to understand what's loaded
+3. **Act** — call specific tools for the task at hand
+
+### Critical Caveats
+- NodeIds are session-specific — never reuse IDs from a previous conversation; always re-fetch
+- Start with verbosity='summary' for figma_get_variables and figma_get_file_data to avoid token exhaustion
+- figma_get_variables requires a Figma Enterprise plan; it will fail on other plans
+- figma_clear_console disrupts monitoring — prefer filtering logs instead`,
+		},
+	);
 
 	private browserManager: BrowserManager | null = null;
 	private consoleMonitor: ConsoleMonitor | null = null;
@@ -348,6 +376,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 					.optional()
 					.describe("Only logs after this timestamp (Unix ms)"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ count, level, since }) => {
 				try {
 					await this.ensureInitialized();
@@ -400,6 +429,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 										error: errorMessage,
 										message: "Failed to retrieve console logs. Make sure to call figma_navigate first to initialize the browser.",
 										hint: "Try: figma_navigate({ url: 'https://www.figma.com/design/your-file' })",
+										ai_instruction: "Console log retrieval failed because the browser is not connected. Call figma_navigate with the user's Figma file URL first, then retry figma_get_console_logs.",
 									},
 									null,
 									2,
@@ -435,6 +465,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 					.default("png")
 					.describe("Image format (default: png)"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ nodeId, scale, format }) => {
 				try {
 					const api = await this.getFigmaAPI();
@@ -444,7 +475,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 
 					if (!currentUrl) {
 						throw new Error(
-							"No Figma file open. Either provide a nodeId parameter or call figma_navigate first to open a Figma file."
+							"No Figma file open. Either provide a nodeId parameter or call figma_navigate first to open a Figma file. [AI: Call figma_navigate with the user's Figma file URL, then retry this tool.]"
 						);
 					}
 
@@ -532,6 +563,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 		// Tool 3: Watch Console (Real-time streaming)
 		this.server.tool(
 			"figma_watch_console",
+			"Stream console logs in real-time for a specified duration. Blocks for the given duration, then returns all logs captured during the watch period with summary statistics. Use for monitoring plugin execution while user tests manually — best for debugging race conditions, async operations, or live testing. NOT for retrieving past logs (use figma_get_console_logs instead). Returns log entries with timestamps, levels, and source prefixes.",
 			{
 				duration: z
 					.number()
@@ -544,17 +576,18 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 					.default("all")
 					.describe("Filter by log level"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ duration, level }) => {
 				await this.ensureInitialized();
 
 				if (!this.consoleMonitor) {
-					throw new Error("Console monitor not initialized. Call figma_navigate first.");
+					throw new Error("Console monitor not initialized. Call figma_navigate first. [AI: The browser session has not been started. Call figma_navigate with the Figma file URL to initialize monitoring, then retry.]");
 				}
 
 				const consoleMonitor = this.consoleMonitor;
 
 				if (!consoleMonitor.getStatus().isMonitoring) {
-					throw new Error("Console monitoring not active. Call figma_navigate first.");
+					throw new Error("Console monitoring not active. Call figma_navigate first. [AI: Monitoring was initialized but is no longer active — likely lost connection. Call figma_navigate to reconnect, then retry.]");
 				}
 
 				const startTime = Date.now();
@@ -603,6 +636,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 		// Tool 4: Reload Plugin
 		this.server.tool(
 			"figma_reload_plugin",
+			"Reload the current Figma page to hot-reload plugin code changes. Optionally clears console logs before reload. Use during plugin development when user says 'reload', 'refresh', 'test my changes'. Returns reload confirmation and current URL.",
 			{
 				clearConsole: z
 					.boolean()
@@ -610,6 +644,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 					.default(true)
 					.describe("Clear console logs before reload"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ clearConsole: clearConsoleBefore }) => {
 				try {
 					await this.ensureInitialized();
@@ -672,7 +707,9 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 		// Tool 5: Clear Console
 		this.server.tool(
 			"figma_clear_console",
+			"Clear the console log buffer. WARNING: In Cloudflare mode, this disrupts the monitoring connection — you must reconnect the MCP server afterward. Prefer filtering logs with figma_get_console_logs instead of clearing. Returns the number of logs that were cleared.",
 			{},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 			async () => {
 				try {
 					await this.ensureInitialized();
@@ -726,6 +763,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 		// Tool 6: Navigate to Figma
 		this.server.tool(
 			"figma_navigate",
+			"Navigate browser to a Figma URL and start console monitoring. REQUIRED as the first step when starting a new session or switching files — initializes the browser connection and begins log capture. Use when user provides a Figma URL or says 'open this file', 'debug this design'. Returns navigation status and current URL.",
 			{
 				url: z
 					.string()
@@ -734,6 +772,7 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 						"Figma URL to navigate to (e.g., https://www.figma.com/design/abc123)",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ url }) => {
 				try {
 					await this.ensureInitialized();
@@ -829,7 +868,9 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 		// Tool 7: Get Status
 		this.server.tool(
 			"figma_get_status",
+			"Check the MCP server's connection status. Reports whether the browser is running, if console monitoring is active, and the current Figma URL. Use to diagnose connection issues or confirm setup before other tool calls. Returns browser state, monitor state, and initialization status.",
 			{},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async () => {
 				try {
 					const browserRunning = this.browserManager?.isRunning() ?? false;
@@ -907,6 +948,9 @@ export class FigmaConsoleMCPv3 extends McpAgent {
 			() => this.browserManager?.getCurrentUrl() || null,
 			{ isRemoteMode: true },
 		);
+
+		// Register Batch tool
+		registerBatchTool(this.server);
 
 		// Note: MCP Apps (Token Browser, Dashboard) are registered in local.ts only
 		// They require Node.js file system APIs that don't work in Cloudflare Workers

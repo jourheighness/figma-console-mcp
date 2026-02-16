@@ -1469,13 +1469,24 @@ export function registerDesignCodeTools(
 				.optional()
 				.default(true)
 				.describe("Enable token coverage and enrichment analysis. Default: true"),
+			verbose: z
+				.boolean()
+				.optional()
+				.default(false)
+				.describe("Include full designData and codeData in response. Default: false (compact — summary, discrepancies, and action items only)"),
 		},
-		async ({ fileUrl, nodeId, codeSpec, canonicalSource = "design", enrich = true }) => {
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true,
+		},
+		async ({ fileUrl, nodeId, codeSpec, canonicalSource = "design", enrich = true, verbose = false }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
 					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode).",
+						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.]",
 					);
 				}
 
@@ -1492,7 +1503,7 @@ export function registerDesignCodeTools(
 				const nodesResponse = await api.getNodes(fileKey, [nodeId], { depth: 2 });
 				const nodeData = nodesResponse?.nodes?.[nodeId];
 				if (!nodeData?.document) {
-					throw new Error(`Node ${nodeId} not found in file ${fileKey}`);
+					throw new Error(`Node ${nodeId} not found in file ${fileKey}. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_search_components.]`);
 				}
 				const node = nodeData.document;
 
@@ -1636,8 +1647,13 @@ export function registerDesignCodeTools(
 					codeData: codeSpec,
 				};
 
+				// When verbose=false, strip designData and codeData (echoed input the LLM already has)
+				const output = verbose
+					? result
+					: { summary: result.summary, discrepancies: result.discrepancies, actionItems: result.actionItems, ai_instruction: result.ai_instruction };
+
 				return {
-					content: [{ type: "text", text: JSON.stringify(result) }],
+					content: [{ type: "text", text: JSON.stringify(output) }],
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
@@ -1687,6 +1703,17 @@ export function registerDesignCodeTools(
 			systemName: z.string().optional().describe("Design system name for headers"),
 			enrich: z.boolean().optional().default(true).describe("Enable enrichment for token data"),
 			includeFrontmatter: z.boolean().optional().default(true).describe("Include YAML frontmatter metadata"),
+			verbose: z
+				.boolean()
+				.optional()
+				.default(false)
+				.describe("Include metadata (nodeId, fileKey, timestamp, data sources). Default: false (compact — markdown + suggested path only)"),
+		},
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true,
 		},
 		async ({
 			fileUrl,
@@ -1697,12 +1724,13 @@ export function registerDesignCodeTools(
 			systemName,
 			enrich = true,
 			includeFrontmatter = true,
+			verbose = false,
 		}) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
 					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode).",
+						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.]",
 					);
 				}
 
@@ -1719,7 +1747,7 @@ export function registerDesignCodeTools(
 				const nodesResponse = await api.getNodes(fileKey, [nodeId], { depth: 2 });
 				const nodeData = nodesResponse?.nodes?.[nodeId];
 				if (!nodeData?.document) {
-					throw new Error(`Node ${nodeId} not found in file ${fileKey}`);
+					throw new Error(`Node ${nodeId} not found in file ${fileKey}. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_search_components.]`);
 				}
 				const node = nodeData.document;
 
@@ -1868,8 +1896,13 @@ export function registerDesignCodeTools(
 					ai_instruction: `Documentation generated for ${componentName} component. Ask the user where they'd like to save this file. Suggested path: ${suggestedPath}`,
 				};
 
+				// When verbose=false, return only essential fields (strip metadata)
+				const output = verbose
+					? result
+					: { componentName: result.componentName, markdown: result.markdown, suggestedOutputPath: result.suggestedOutputPath, ai_instruction: result.ai_instruction };
+
 				return {
-					content: [{ type: "text", text: JSON.stringify(result) }],
+					content: [{ type: "text", text: JSON.stringify(output) }],
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);

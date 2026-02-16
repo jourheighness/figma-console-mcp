@@ -36,7 +36,11 @@ import {
 } from "./core/figma-api.js";
 import { registerFigmaAPITools } from "./core/figma-tools.js";
 import { registerDesignCodeTools } from "./core/design-code-tools.js";
+import { registerBatchTool } from "./core/batch-tool.js";
 import { registerCommentTools } from "./core/comment-tools.js";
+import { SessionCache, CachedFigmaAPI } from "./core/session-cache.js";
+import { ProjectContextCache } from "./core/project-context.js";
+import { registerContextResources } from "./core/context-resources.js";
 import { FigmaDesktopConnector } from "./core/figma-desktop-connector.js";
 import type { IFigmaConnector } from "./core/figma-connector.js";
 import { FigmaWebSocketServer } from "./core/websocket-server.js";
@@ -83,6 +87,11 @@ class LocalFigmaConsoleMCP {
 		}
 	> = new Map();
 
+	// Session-scoped API cache (Layer 3) — deduplicates read-only Figma API calls
+	private sessionCache = new SessionCache();
+	// Disk-persistent project context cache (Layer 1) — survives server restarts
+	private projectContextCache = new ProjectContextCache();
+
 	constructor() {
 		this.server = new McpServer(
 			{
@@ -90,7 +99,31 @@ class LocalFigmaConsoleMCP {
 				version: "0.1.0",
 			},
 			{
-				instructions: `## Figma Console MCP - Visual Design Workflow
+				instructions: `## Figma Console MCP — Tool Selection Guide
+
+### Quick Reference
+- **Debug plugin logs**: figma_get_console_logs (past logs) or figma_watch_console (real-time stream)
+- **Visual inspection**: figma_take_screenshot (page/node) or figma_get_component_image (component render) or figma_capture_screenshot (live plugin state)
+- **File exploration**: figma_get_file_data (start with verbosity='summary', depth=1)
+- **Design tokens**: figma_get_variables (with filtering: collection, namePattern, mode)
+- **Component lookup**: figma_get_component (metadata), figma_get_component_for_development (dev spec), figma_search_components (by name)
+- **Styles**: figma_get_styles (color, text, effect, grid styles)
+- **Execute code**: figma_execute (run JS in Figma's plugin sandbox)
+- **Comments**: figma_get_comments / figma_post_comment / figma_delete_comment
+- **Design-code sync**: figma_check_design_parity (compare Figma vs code specs)
+- **Current selection**: figma_get_selection (what user has selected in Figma)
+- **Multi-tool efficiency**: figma_batch (run up to 10 tools in one request)
+- **Variable mutations**: figma_batch_create_variables / figma_batch_update_variables (bulk ops, 10-50x faster)
+- **Component instantiation**: figma_instantiate_component (place component instances)
+
+### Critical Gotchas
+- NodeIds are session-specific — never reuse IDs from a previous conversation; always re-fetch with figma_search_components or figma_get_file_data
+- Start with verbosity='summary' for figma_get_variables and figma_get_file_data to avoid token exhaustion
+- figma_get_variables requires a Figma Enterprise plan
+- Component instances expose properties (TEXT, BOOLEAN, VARIANT, INSTANCE_SWAP) — use figma_set_instance_properties instead of editing text nodes directly
+- After creating/modifying visual elements, ALWAYS take a screenshot to verify the result
+
+## Visual Design Workflow
 
 This MCP server enables AI-assisted design creation in Figma. Follow these mandatory workflows:
 
@@ -179,7 +212,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 				"Initializing Figma API with token from environment",
 			);
 
-			this.figmaAPI = new FigmaAPI({ accessToken });
+			this.figmaAPI = new CachedFigmaAPI({ accessToken }, this.sessionCache);
 		}
 
 		return this.figmaAPI;
@@ -519,6 +552,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.optional()
 					.describe("Only logs after this timestamp (Unix ms)"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ count, level, since }) => {
 				try {
 					// Try CDP console monitor first, fall back to WebSocket console buffer
@@ -547,7 +581,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 							}
 						} catch {
 							throw new Error(
-								"No console monitoring available. Either enable CDP (--remote-debugging-port=9222) or open the Desktop Bridge plugin for WebSocket-based console capture.",
+								"No console monitoring available. Either enable CDP (--remote-debugging-port=9222) or open the Desktop Bridge plugin for WebSocket-based console capture. [AI: No transport is connected. Ask the user to open the Desktop Bridge plugin in Figma, or relaunch Figma with --remote-debugging-port=9222 for CDP.]",
 							);
 						}
 					}
@@ -642,6 +676,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.default("png")
 					.describe("Image format (default: png)"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ nodeId, scale, format }) => {
 				try {
 					const api = await this.getFigmaAPI();
@@ -651,7 +686,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 
 					if (!currentUrl) {
 						throw new Error(
-							"No Figma file open. Either provide a nodeId parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode).",
+							"No Figma file open. Either provide a nodeId parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No active file URL. Call figma_navigate with the Figma file URL, or ask the user to open the Desktop Bridge plugin in the target file.]",
 						);
 					}
 
@@ -782,6 +817,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.default("all")
 					.describe("Filter by log level"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ duration, level }) => {
 				// Determine which console source to use
 				const useCDP = this.consoleMonitor?.getStatus().isMonitoring;
@@ -789,7 +825,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 
 				if (!useCDP && !useWS) {
 					throw new Error(
-						"No console monitoring available. Either enable CDP (--remote-debugging-port=9222) or open the Desktop Bridge plugin for WebSocket-based console capture.",
+						"No console monitoring available. Either enable CDP (--remote-debugging-port=9222) or open the Desktop Bridge plugin for WebSocket-based console capture. [AI: No transport is connected. Ask the user to open the Desktop Bridge plugin in Figma, or relaunch Figma with --remote-debugging-port=9222 for CDP.]",
 					);
 				}
 
@@ -858,6 +894,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.default(true)
 					.describe("Clear console logs before reload"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ clearConsole: clearConsoleBefore }) => {
 				try {
 					let transport: "cdp" | "websocket" = "cdp";
@@ -885,7 +922,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						await this.ensureInitialized();
 						if (!this.browserManager) {
 							throw new Error(
-								"No connection available. Open the Desktop Bridge plugin in Figma or enable CDP.",
+								"No connection available. Open the Desktop Bridge plugin in Figma or enable CDP. [AI: Neither WebSocket nor CDP transport is connected. Ask the user to open the Desktop Bridge plugin in Figma, then retry.]",
 							);
 						}
 						if (clearConsoleBefore && this.consoleMonitor) {
@@ -949,6 +986,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 			"figma_clear_console",
 			"Clear the console log buffer. In WebSocket mode, this safely clears the buffer without disrupting the connection. In CDP mode, this disrupts monitoring and requires MCP reconnect. Returns number of logs cleared.",
 			{},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 			async () => {
 				try {
 					let clearedCount = 0;
@@ -967,7 +1005,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 							clearedCount = this.consoleMonitor.clear();
 						} else {
 							throw new Error(
-								"No console monitoring available. Open the Desktop Bridge plugin or enable CDP.",
+								"No console monitoring available. Open the Desktop Bridge plugin or enable CDP. [AI: No transport is connected. Ask the user to open the Desktop Bridge plugin, or relaunch Figma with --remote-debugging-port=9222.]",
 							);
 						}
 					}
@@ -1027,6 +1065,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"Figma URL to navigate to (e.g., https://www.figma.com/design/abc123)",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ url }) => {
 				try {
 					// Try CDP first (full browser navigation)
@@ -1226,6 +1265,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 			"figma_get_status",
 			"Check connection status to Figma Desktop. Reports which transport is active (CDP or WebSocket) and connection health. Works with both CDP (--remote-debugging-port=9222) and WebSocket (Desktop Bridge plugin) transports.",
 			{},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async () => {
 				try {
 					// Check CDP availability (non-blocking)
@@ -1475,6 +1515,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 			"figma_reconnect",
 			"Force a complete reconnection to Figma Desktop. Works with both CDP and WebSocket transports. Use when connection seems stale or after switching files.",
 			{},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async () => {
 				try {
 					// Clear cached desktop connector to force fresh detection
@@ -1588,6 +1629,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.default(false)
 					.describe("If true, fetches additional details (fills, strokes, styles) for each selected node via figma_execute"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ verbose }) => {
 				try {
 					const selection = this.wsServer?.getCurrentSelection() ?? null;
@@ -1700,6 +1742,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.default(false)
 					.describe("Clear the change buffer after reading. Set to true for polling workflows."),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ since, count, clear }) => {
 				try {
 					if (!this.wsServer?.isClientConnected()) {
@@ -1770,6 +1813,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 			"figma_list_open_files",
 			"List all Figma files currently connected via the Desktop Bridge plugin. Shows which files have the plugin open and which one is the active target for tool calls. Use figma_navigate to switch between files. WebSocket multi-client mode — each file with the Desktop Bridge plugin maintains its own connection.",
 			{},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async () => {
 				try {
 					if (!this.wsServer?.isClientConnected()) {
@@ -1878,6 +1922,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"Execution timeout in milliseconds (default: 5000, max: 30000)",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
 			async ({ code, timeout }) => {
 				const maxRetries = 2;
 				let lastError: Error | null = null;
@@ -2002,6 +2047,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"The new value. For COLOR: hex string like '#FF0000'. For FLOAT: number. For STRING: text. For BOOLEAN: true/false.",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ variableId, modeId, value }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2075,6 +2121,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"Optional initial values by mode ID. Example: { '1:0': '#FF0000', '1:1': '#0000FF' }",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({
 				name,
 				collectionId,
@@ -2152,6 +2199,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"Additional mode names to create. Example: ['Dark', 'High Contrast']",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ name, initialModeName, additionalModes }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2208,6 +2256,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"The variable ID to delete (e.g., 'VariableID:123:456'). Get this from figma_get_variables.",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 			async ({ variableId }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2263,6 +2312,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"The collection ID to delete (e.g., 'VariableCollectionId:123:456'). Get this from figma_get_variables.",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 			async ({ collectionId }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2323,6 +2373,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"The new name for the variable. Can include slashes for grouping (e.g., 'colors/primary/background').",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ variableId, newName }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2382,6 +2433,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"The name for the new mode (e.g., 'Dark', 'Mobile', 'High Contrast').",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ collectionId, modeName }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2446,6 +2498,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 						"The new name for the mode (e.g., 'Dark Theme', 'Tablet').",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ collectionId, modeId, newName }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2536,6 +2589,7 @@ If Design Systems Assistant MCP is not available, install it from: https://githu
 					.max(100)
 					.describe("Array of variables to create (1-100)"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ collectionId, variables }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2672,6 +2726,7 @@ return {
 					.max(100)
 					.describe("Array of updates to apply (1-100)"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ updates }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -2816,6 +2871,7 @@ return {
 					.max(100)
 					.describe("Token definitions (1-100)"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ collectionName, modes, tokens }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -3105,6 +3161,7 @@ return {
 						"Force refresh the cached data (use sparingly - extraction can take minutes for large files)",
 					),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ forceRefresh }) => {
 				try {
 					const {
@@ -3339,6 +3396,7 @@ return {
 					.default(0)
 					.describe("Offset for pagination"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ query, category, limit, offset }) => {
 				try {
 					const { searchComponents } = await import(
@@ -3429,6 +3487,7 @@ return {
 					.optional()
 					.describe("The component name (used if key not provided)"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ componentKey, componentName }) => {
 				try {
 					if (!componentKey && !componentName) {
@@ -3576,6 +3635,7 @@ return {
 					.default(50)
 					.describe("Maximum tokens to return (default: 50)"),
 			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 			async ({ type, filter, limit }) => {
 				try {
 					// Auto-load design system cache if needed
@@ -3721,6 +3781,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 					.optional()
 					.describe("Parent node ID to append the instance to"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({
 				componentKey,
 				nodeId,
@@ -3806,6 +3867,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 					.optional()
 					.describe("Optional rich text description using markdown formatting"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, description, descriptionMarkdown }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -3876,6 +3938,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 						"Default value for the property. BOOLEAN: true/false, TEXT: string, INSTANCE_SWAP: component key, VARIANT: variant value",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ nodeId, propertyName, type, defaultValue }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -3958,6 +4021,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 					})
 					.describe("Object with the values to update"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, propertyName, newValue }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4017,6 +4081,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 						"The full property name with suffix (e.g., 'Show Icon#123:456')",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, propertyName }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4083,6 +4148,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 						"Whether to apply child constraints during resize (default: true)",
 					),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, width, height, withConstraints }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4140,6 +4206,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 				x: z.number().describe("New X position"),
 				y: z.number().describe("New Y position"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, x, y }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4208,6 +4275,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 					)
 					.describe("Array of fill objects"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, fills }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4271,6 +4339,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 					.optional()
 					.describe("Stroke thickness in pixels"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, strokes, strokeWeight }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4325,6 +4394,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 			{
 				nodeId: z.string().describe("The node ID to clone"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ nodeId }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4375,6 +4445,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 			{
 				nodeId: z.string().describe("The node ID to delete"),
 			},
+			{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4426,6 +4497,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 				nodeId: z.string().describe("The node ID to rename"),
 				newName: z.string().describe("The new name for the node"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, newName }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4478,6 +4550,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 				text: z.string().describe("The new text content"),
 				fontSize: z.number().optional().describe("Optional font size to set"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ nodeId, text, fontSize }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4559,6 +4632,7 @@ After instantiating components, use figma_take_screenshot to verify the result l
 					.optional()
 					.describe("Properties for the new node"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 			async ({ parentId, nodeType, properties }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -4651,6 +4725,7 @@ Recreates the set using figma.combineAsVariants() for proper Figma integration, 
 					.optional()
 					.describe("Layout options"),
 			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 			async ({ componentSetId, componentSetName, options }) => {
 				try {
 					const connector = await this.getDesktopConnector();
@@ -5162,6 +5237,166 @@ return {
 			() => this.getCurrentFileUrl(),
 		);
 
+		// Register Batch tool
+		registerBatchTool(this.server);
+
+		// Register context resources (Layer 2 — figma://context/* MCP resources)
+		registerContextResources(
+			this.server,
+			this.projectContextCache,
+			() => this.getFigmaAPI(),
+			() => this.getCurrentFileUrl(),
+		);
+
+		// Tool: Force-rebuild project context cache for a file
+		this.server.tool(
+			"figma_invalidate_context",
+			"Force-rebuild the project context cache for a Figma file. Use when the cached context is stale (e.g. after design changes that weren't auto-detected, or after fixing token scopes). Clears all 3 cache layers (disk, session, variables) and rebuilds fresh context from the Figma API.",
+			{
+				fileUrl: z
+					.string()
+					.optional()
+					.describe("Figma file URL. If omitted, uses the currently connected file."),
+			},
+			{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+			async ({ fileUrl }) => {
+				try {
+					const url = fileUrl || this.getCurrentFileUrl();
+					if (!url) {
+						return {
+							content: [{ type: "text" as const, text: JSON.stringify({ error: "No Figma file connected. Pass a fileUrl or open a file first." }) }],
+							isError: true,
+						};
+					}
+
+					const fileKey = extractFileKey(url);
+					if (!fileKey) {
+						return {
+							content: [{ type: "text" as const, text: JSON.stringify({ error: `Could not extract file key from URL: ${url}` }) }],
+							isError: true,
+						};
+					}
+
+					// Clear all cache layers for this file
+					this.variablesCache.delete(fileKey);
+					this.sessionCache.invalidateFile(fileKey);
+
+					// Force-rebuild project context (invalidates disk + memory, then rebuilds)
+					const api = await this.getFigmaAPI();
+					const ctx = await this.projectContextCache.forceRebuild(fileKey, api);
+
+					return {
+						content: [{
+							type: "text" as const,
+							text: JSON.stringify({
+								success: true,
+								fileKey,
+								fileName: ctx.fileName,
+								summary: ctx.summary,
+								variables: {
+									source: ctx.variables.source,
+									totalVariables: ctx.variables.totalVariables,
+									collections: ctx.variables.collections.length,
+									sourceError: ctx.variables.sourceError,
+								},
+								components: { total: ctx.components.total, withKeys: Object.keys(ctx.components.keyMap).length },
+								componentSets: { total: ctx.componentSets.total, withKeys: Object.keys(ctx.componentSets.keyMap).length },
+								styles: ctx.styles,
+								generatedAt: ctx.generatedAt,
+							}),
+						}],
+					};
+				} catch (error) {
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
+						isError: true,
+					};
+				}
+			},
+		);
+
+		// Tool: Look up component keys by name (instant, from cache — no API call)
+		this.server.tool(
+			"figma_get_component_keys",
+			"Look up component keys and nodeIds by name pattern. Returns keys needed for figma_instantiate_component and cross-file imports. Instant lookup from cached context — no API call. Use after reading figma://context/current to find specific component keys.",
+			{
+				namePattern: z
+					.string()
+					.describe("Search pattern to match component names (case-insensitive substring match). E.g. 'Button', 'Icon / Arrow', 'Input'."),
+				fileUrl: z
+					.string()
+					.optional()
+					.describe("Figma file URL. If omitted, uses the currently connected file."),
+				includeVariants: z
+					.boolean()
+					.optional()
+					.default(false)
+					.describe("Include individual component variants (e.g. 'Type=Primary, Size=SM'). Default: false (only component sets and standalone components)."),
+			},
+			{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+			async ({ namePattern, fileUrl, includeVariants }) => {
+				try {
+					const url = fileUrl || this.getCurrentFileUrl();
+					if (!url) {
+						return {
+							content: [{ type: "text" as const, text: JSON.stringify({ error: "No Figma file connected. Pass a fileUrl or open a file first." }) }],
+							isError: true,
+						};
+					}
+
+					const fileKey = extractFileKey(url);
+					if (!fileKey) {
+						return {
+							content: [{ type: "text" as const, text: JSON.stringify({ error: `Could not extract file key from URL: ${url}` }) }],
+							isError: true,
+						};
+					}
+
+					// Get from cache (build if cold)
+					const api = await this.getFigmaAPI();
+					const ctx = await this.projectContextCache.get(fileKey, api)
+						?? await this.projectContextCache.build(fileKey, api);
+
+					const pattern = namePattern.toLowerCase();
+					const results: Array<{ name: string; key: string; nodeId: string; type: 'component' | 'componentSet' }> = [];
+
+					// Search component sets first (most useful for instantiation)
+					for (const [name, entry] of Object.entries(ctx.componentSets.keyMap)) {
+						if (name.toLowerCase().includes(pattern)) {
+							results.push({ name, key: entry.key, nodeId: entry.nodeId, type: 'componentSet' });
+						}
+					}
+
+					// Search individual components
+					if (includeVariants || results.length === 0) {
+						for (const [name, entry] of Object.entries(ctx.components.keyMap)) {
+							if (name.toLowerCase().includes(pattern)) {
+								results.push({ name, key: entry.key, nodeId: entry.nodeId, type: 'component' });
+							}
+						}
+					}
+
+					return {
+						content: [{
+							type: "text" as const,
+							text: JSON.stringify({
+								fileKey,
+								pattern: namePattern,
+								matches: results.length,
+								results: results.slice(0, 50),
+								...(results.length > 50 && { truncated: true, totalMatches: results.length }),
+							}),
+						}],
+					};
+				} catch (error) {
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
+						isError: true,
+					};
+				}
+			},
+		);
+
 		// MCP Apps - gated behind ENABLE_MCP_APPS env var
 		if (process.env.ENABLE_MCP_APPS === "true") {
 			registerTokenBrowserApp(this.server, async (fileUrl?: string) => {
@@ -5599,6 +5834,12 @@ return {
 				// Log when plugin files connect/disconnect (with file identity)
 				this.wsServer.on("fileConnected", (data: { fileKey: string; fileName: string }) => {
 					logger.info({ fileKey: data.fileKey, fileName: data.fileName }, "Desktop Bridge plugin connected via WebSocket");
+					// Warm the project context cache for the connected file
+					this.getFigmaAPI()
+						.then((api) => this.projectContextCache.build(data.fileKey, api))
+						.catch((err) => {
+							logger.debug({ fileKey: data.fileKey, error: err instanceof Error ? err.message : String(err) }, "Failed to warm project context cache");
+						});
 				});
 				this.wsServer.on("fileDisconnected", (data: { fileKey: string; fileName: string }) => {
 					logger.info({ fileKey: data.fileKey, fileName: data.fileName }, "Desktop Bridge plugin disconnected from WebSocket");
@@ -5613,12 +5854,17 @@ return {
 						if (data.fileKey) {
 							// Per-file cache invalidation — only clear the affected file's cache
 							this.variablesCache.delete(data.fileKey);
+							this.sessionCache.invalidateFile(data.fileKey);
+							this.projectContextCache.invalidate(data.fileKey).catch(() => {});
 						} else {
+							// No fileKey — clear everything
 							this.variablesCache.clear();
+							this.sessionCache.clear();
+							this.projectContextCache.invalidateAll().catch(() => {});
 						}
-						logger.debug(
+						logger.info(
 							{ fileKey: data.fileKey, changeCount: data.changeCount, hasStyleChanges: data.hasStyleChanges, hasNodeChanges: data.hasNodeChanges },
-							"Variable cache invalidated due to document changes"
+							"Caches invalidated due to document changes"
 						);
 					}
 				});

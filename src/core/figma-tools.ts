@@ -767,6 +767,7 @@ export function registerFigmaAPITools(
 					"Set to true when user asks for: file statistics, health metrics, design system audit, or quality analysis. Adds statistics, health scores, and audit summaries. Default: false"
 				),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, depth, nodeIds, enrich, verbosity }) => {
 			try {
 				// Initialize API client (required for file data - no Desktop Bridge alternative)
@@ -984,9 +985,9 @@ export function registerFigmaAPITools(
 			verbosity: z
 				.enum(["inventory", "summary", "standard", "full"])
 				.optional()
-				.default("standard")
+				.default("summary")
 				.describe(
-					"Controls payload size: 'inventory' (names/IDs only, ~95% smaller, use with filtered), 'summary' (names/values only, ~80% smaller), 'standard' (essential properties, ~45% smaller), 'full' (everything). Default: standard"
+					"Controls payload size: 'inventory' (names/IDs only, ~95% smaller, use with filtered), 'summary' (names/values only, ~80% smaller), 'standard' (essential properties, ~45% smaller), 'full' (everything). Default: summary"
 				),
 			enrich: z
 				.boolean()
@@ -1088,6 +1089,7 @@ export function registerFigmaAPITools(
 					"Default: false."
 				),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({
 			fileUrl,
 			includePublished,
@@ -2323,6 +2325,7 @@ export function registerFigmaAPITools(
 					"Set to true when user asks for: design token coverage, hardcoded value analysis, or component quality metrics. Adds token coverage analysis and hardcoded value detection. Default: false. Only applicable for metadata format."
 				),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, nodeId, format = "metadata", enrich }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
@@ -2606,9 +2609,9 @@ export function registerFigmaAPITools(
 			verbosity: z
 				.enum(["summary", "standard", "full"])
 				.optional()
-				.default("standard")
+				.default("summary")
 				.describe(
-					"Controls payload size: 'summary' (names/types only, ~85% smaller), 'standard' (essential properties, ~40% smaller), 'full' (everything). Default: standard"
+					"Controls payload size: 'summary' (names/types only, ~85% smaller), 'standard' (essential properties, ~40% smaller), 'full' (everything). Default: summary"
 				),
 			enrich: z
 				.boolean()
@@ -2631,6 +2634,7 @@ export function registerFigmaAPITools(
 					"Which code formats to generate examples for. Use when user mentions specific formats like 'CSS', 'Tailwind', 'SCSS', 'TypeScript', etc. Automatically enables enrichment. Default: all formats"
 				),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, verbosity, enrich, include_usage, include_exports, export_formats }) => {
 			try {
 				let api;
@@ -2804,6 +2808,7 @@ export function registerFigmaAPITools(
 				.default("png")
 				.describe("Image format (default: png)"),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, nodeId, scale, format }) => {
 			try {
 				let api;
@@ -2842,7 +2847,7 @@ export function registerFigmaAPITools(
 
 				if (!node) {
 					throw new Error(
-						`Node ${nodeId} not found in file ${fileKey}. Please verify the node ID is correct.`
+						`Node ${nodeId} not found in file ${fileKey}. Please verify the node ID is correct. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_search_components.]`
 					);
 				}
 
@@ -2951,6 +2956,7 @@ export function registerFigmaAPITools(
 				.default(true)
 				.describe("Include rendered image for visual reference (default: true)"),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, nodeId, includeImage }) => {
 			try {
 				let api;
@@ -3153,6 +3159,7 @@ export function registerFigmaAPITools(
 				.optional()
 				.describe("Specific node IDs to retrieve (optional)"),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, depth, nodeIds }) => {
 			try {
 				let api;
@@ -3357,6 +3364,7 @@ export function registerFigmaAPITools(
 				.default(2)
 				.describe("Scale factor (default: 2 for 2x resolution)"),
 		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async ({ nodeId, format, scale }) => {
 			try {
 				logger.info({ nodeId, format, scale }, "Capturing screenshot via Desktop Bridge");
@@ -3490,6 +3498,7 @@ export function registerFigmaAPITools(
 					"The tool automatically handles the #nodeId suffix for TEXT/BOOLEAN/INSTANCE_SWAP properties."
 				),
 		},
+		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async ({ nodeId, properties }) => {
 			try {
 				logger.info({ nodeId, properties: Object.keys(properties) }, "Setting instance properties via Desktop Bridge");
