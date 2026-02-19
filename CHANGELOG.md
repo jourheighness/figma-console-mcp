@@ -66,14 +66,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **WebSocket plugin UI reload** — `figma_reload_plugin` now works via WebSocket by re-invoking `figma.showUI()` to reload the plugin UI iframe. The `code.js` context continues running; only the UI is refreshed and the WebSocket connection auto-reconnects.
 - **Graceful `figma_navigate` in WebSocket mode** — Instead of failing silently, `figma_navigate` now detects WebSocket-only mode and returns actionable guidance: the connected file identity and instructions to manually navigate in Figma Desktop.
 - **`figma_get_selection` tool** — Real-time selection tracking via WebSocket. The AI knows what the user has selected in Figma without needing to ask. Returns node IDs, names, types, and dimensions. Optional `verbose` mode fetches fills, strokes, text content, and component properties for selected nodes. Selection state updates automatically as the user clicks around.
-- **`figma_get_design_changes` tool** — Buffered document change event feed. The AI can ask "what changed since I last checked?" instead of re-reading the entire file. Returns change events with node IDs, style/node change flags, and timestamps. Supports `since` timestamp filtering and `clear` for polling workflows. Buffer holds up to 200 events.
+- **`figma_connection` (action: "changes") tool** — Buffered document change event feed. The AI can ask "what changed since I last checked?" instead of re-reading the entire file. Returns change events with node IDs, style/node change flags, and timestamps. Supports `since` timestamp filtering and `clear` for polling workflows. Buffer holds up to 200 events.
 - **Live page tracking** — `figma_get_status` now reports which page the user is currently viewing, updated in real-time via `figma.on('currentpagechange')`. Combined with selection tracking, the AI knows both "where" (page) and "what" (selection) without roundtrips.
 
 ### Fixed
 - **`figma_get_component_image` crash** — Was using `api.getFile()` with `ids` param but accessing `fileData.nodes[nodeId]` which doesn't exist on the file endpoint response. Changed to `api.getNodes()` which returns the correct `{ nodes: { nodeId: { document } } }` structure.
 - **`figma_set_instance_properties` crash with dynamic-page access** — Plugin code used synchronous `node.componentProperties` and `node.mainComponent` which fail with `documentAccess: "dynamic-page"`. Added `await node.getMainComponentAsync()` before accessing properties.
 - **Rename tools showing "from undefined"** — The `handleResult` function in `ui.html` was only passing through the `dataKey` field, dropping `oldName` from rename operation responses. Fixed to pass through `oldName` and `instance` fields.
-- **`figma_capture_screenshot` and `figma_set_instance_properties` bypassing WebSocket** — Both tools had a try/catch wrapper around `getDesktopConnector()` that silently swallowed errors and fell through to a legacy CDP fallback path, even when the connector factory was available. Removed the try/catch so errors propagate directly, and added a `!getDesktopConnector` guard so the legacy path only runs when no connector factory exists.
+- **`figma_screenshot` and `figma_set_instance_properties` bypassing WebSocket** — Both tools had a try/catch wrapper around `getDesktopConnector()` that silently swallowed errors and fell through to a legacy CDP fallback path, even when the connector factory was available. Removed the try/catch so errors propagate directly, and added a `!getDesktopConnector` guard so the legacy path only runs when no connector factory exists.
 - **Transport priority reversed for reliability** — `getDesktopConnector()` now tries WebSocket first (instant connectivity check) then falls back to CDP (which involves a network timeout). Previously CDP was tried first, and its timeout delay caused race conditions during file switching.
 - **Multi-file WebSocket client cycling** — When multiple Figma files had the Desktop Bridge plugin open, background plugins would aggressively reconnect (500ms backoff) after being displaced, creating an infinite replacement loop. Fixed by detecting the "Replaced by new connection" close reason in the plugin UI and stopping auto-reconnect for displaced instances, while keeping the standard reconnection backoff (up to 5 seconds) for other disconnections.
 - **MCP Apps (Token Browser + Dashboard) bypassing WebSocket** — Both apps used `browserManager` (CDP-only) to construct a `FigmaDesktopConnector` directly, skipping WebSocket entirely. In WebSocket-only mode, they fell through to REST API (Enterprise plan required). Changed to use the transport-agnostic `getDesktopConnector()` which works with both WebSocket and CDP.
@@ -116,15 +116,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Batch variable tools** for high-performance bulk operations
-  - `figma_batch_create_variables` — Create up to 100 variables in one call (10-50x faster than individual calls)
-  - `figma_batch_update_variables` — Update up to 100 variable values in one call
+  - `figma_batch_variables` (action: "create") — Create up to 100 variables in one call (10-50x faster than individual calls)
+  - `figma_batch_variables` (action: "update") — Update up to 100 variable values in one call
   - `figma_setup_design_tokens` — Create a complete token system (collection + modes + variables) atomically
 - **Plugin frame caching** — Cached Desktop Bridge plugin frame reference eliminates redundant DOM lookups
 - **Diagnostic gating** — Console log capture gated behind active monitoring to reduce idle overhead
 - **Batch routing guidance** in MCP server instructions so AI models prefer batch tools automatically
 
 ### Changed
-- Tool descriptions trimmed for token efficiency (`figma_execute` -75%, `figma_arrange_component_set` -78%)
+- Tool descriptions trimmed for token efficiency (`figma_arrange_component_set` -78%, and other tools)
 - JSON responses compacted across 113 `JSON.stringify` calls (removed `null, 2` formatting)
 - Individual variable tool descriptions now cross-reference batch alternatives
 

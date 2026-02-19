@@ -360,7 +360,7 @@ Use markdown formatting."
 
 **What happens:**
 1. AI finds the Button component
-2. Calls `figma_set_description` with markdown-formatted documentation
+2. Calls `figma_component_property(action: "set_description")` with markdown-formatted documentation
 3. Description appears in Figma's component panel
 
 ---
@@ -379,9 +379,9 @@ Use markdown formatting."
 ```
 
 **What happens:**
-1. AI clones the component using `figma_clone_node`
-2. Modifies each clone using node manipulation tools
-3. Renames using `figma_rename_node`
+1. AI clones the component using `figma_edit_node` (action: "clone")
+2. Modifies each clone using `figma_set_appearance` and `figma_edit_node`
+3. Renames using `figma_edit_node` (action: "rename")
 4. Takes a screenshot to show all variations
 
 ---

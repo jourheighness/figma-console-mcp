@@ -725,29 +725,164 @@ export function registerFigmaAPITools(
 	getDesktopConnector?: () => Promise<any>,
 ) {
 	const isRemoteMode = options?.isRemoteMode ?? false;
-	// Tool 8: Get File Data (General Purpose)
+	// Tool 8: Get File Data (General Purpose, with plugin scope option)
 	// NOTE: For specific use cases, consider using specialized tools:
-	// - figma_get_component_for_development: For UI component implementation
-	// - figma_get_file_for_plugin: For plugin development
+	// - figma_get_component format='development': For UI component implementation
+	// - scope='plugin': For plugin development (filtered to IDs, structure, plugin data)
+
+	// Filter to plugin-relevant properties only (used by scope='plugin')
+	const filterForPlugin = (node: any): any => {
+		if (!node) return node;
+
+		const result: any = {
+			id: node.id,
+			name: node.name,
+			type: node.type,
+			description: node.description,
+			descriptionMarkdown: node.descriptionMarkdown,
+		};
+
+		// Navigation & structure
+		if (node.visible !== undefined) result.visible = node.visible;
+		if (node.locked) result.locked = node.locked;
+		if (node.removed) result.removed = node.removed;
+
+		// Lightweight bounds (just position/size)
+		if (node.absoluteBoundingBox) {
+			result.bounds = {
+				x: node.absoluteBoundingBox.x,
+				y: node.absoluteBoundingBox.y,
+				width: node.absoluteBoundingBox.width,
+				height: node.absoluteBoundingBox.height,
+			};
+		}
+
+		// Plugin data (CRITICAL for plugins)
+		if (node.pluginData) result.pluginData = node.pluginData;
+		if (node.sharedPluginData) result.sharedPluginData = node.sharedPluginData;
+
+		// Component relationships (important for plugins)
+		if (node.componentId) result.componentId = node.componentId;
+		if (node.mainComponent) result.mainComponent = node.mainComponent;
+		if (node.componentPropertyReferences) result.componentPropertyReferences = node.componentPropertyReferences;
+		if (node.instanceOf) result.instanceOf = node.instanceOf;
+		if (node.exposedInstances) result.exposedInstances = node.exposedInstances;
+
+		// Component properties (for manipulation)
+		if (node.componentProperties) result.componentProperties = node.componentProperties;
+
+		// Characters for text nodes (plugins often need this)
+		if (node.characters !== undefined) result.characters = node.characters;
+
+		// Recursively process children
+		if (node.children) {
+			result.children = node.children.map((child: any) => filterForPlugin(child));
+		}
+
+		return result;
+	};
+
+	// Filter to visual/layout/typography properties only (used by format='development')
+	const filterForDevelopment = (n: any): any => {
+		if (!n) return n;
+
+		const result: any = {
+			id: n.id,
+			name: n.name,
+			type: n.type,
+			description: n.description,
+			descriptionMarkdown: n.descriptionMarkdown,
+		};
+
+		// Layout & positioning
+		if (n.absoluteBoundingBox) result.absoluteBoundingBox = n.absoluteBoundingBox;
+		if (n.relativeTransform) result.relativeTransform = n.relativeTransform;
+		if (n.size) result.size = n.size;
+		if (n.constraints) result.constraints = n.constraints;
+		if (n.layoutAlign) result.layoutAlign = n.layoutAlign;
+		if (n.layoutGrow) result.layoutGrow = n.layoutGrow;
+		if (n.layoutPositioning) result.layoutPositioning = n.layoutPositioning;
+
+		// Auto-layout
+		if (n.layoutMode) result.layoutMode = n.layoutMode;
+		if (n.primaryAxisSizingMode) result.primaryAxisSizingMode = n.primaryAxisSizingMode;
+		if (n.counterAxisSizingMode) result.counterAxisSizingMode = n.counterAxisSizingMode;
+		if (n.primaryAxisAlignItems) result.primaryAxisAlignItems = n.primaryAxisAlignItems;
+		if (n.counterAxisAlignItems) result.counterAxisAlignItems = n.counterAxisAlignItems;
+		if (n.paddingLeft !== undefined) result.paddingLeft = n.paddingLeft;
+		if (n.paddingRight !== undefined) result.paddingRight = n.paddingRight;
+		if (n.paddingTop !== undefined) result.paddingTop = n.paddingTop;
+		if (n.paddingBottom !== undefined) result.paddingBottom = n.paddingBottom;
+		if (n.itemSpacing !== undefined) result.itemSpacing = n.itemSpacing;
+		if (n.itemReverseZIndex) result.itemReverseZIndex = n.itemReverseZIndex;
+		if (n.strokesIncludedInLayout) result.strokesIncludedInLayout = n.strokesIncludedInLayout;
+
+		// Visual properties
+		if (n.fills) result.fills = n.fills;
+		if (n.strokes) result.strokes = n.strokes;
+		if (n.strokeWeight !== undefined) result.strokeWeight = n.strokeWeight;
+		if (n.strokeAlign) result.strokeAlign = n.strokeAlign;
+		if (n.strokeCap) result.strokeCap = n.strokeCap;
+		if (n.strokeJoin) result.strokeJoin = n.strokeJoin;
+		if (n.dashPattern) result.dashPattern = n.dashPattern;
+		if (n.cornerRadius !== undefined) result.cornerRadius = n.cornerRadius;
+		if (n.rectangleCornerRadii) result.rectangleCornerRadii = n.rectangleCornerRadii;
+		if (n.effects) result.effects = n.effects;
+		if (n.opacity !== undefined) result.opacity = n.opacity;
+		if (n.blendMode) result.blendMode = n.blendMode;
+		if (n.isMask) result.isMask = n.isMask;
+		if (n.clipsContent) result.clipsContent = n.clipsContent;
+
+		// Typography
+		if (n.characters) result.characters = n.characters;
+		if (n.style) result.style = n.style;
+		if (n.characterStyleOverrides) result.characterStyleOverrides = n.characterStyleOverrides;
+		if (n.styleOverrideTable) result.styleOverrideTable = n.styleOverrideTable;
+
+		// Component properties & variants
+		if (n.componentProperties) result.componentProperties = n.componentProperties;
+		if (n.componentPropertyDefinitions) result.componentPropertyDefinitions = n.componentPropertyDefinitions;
+		if (n.variantProperties) result.variantProperties = n.variantProperties;
+		if (n.componentId) result.componentId = n.componentId;
+
+		// State
+		if (n.visible !== undefined) result.visible = n.visible;
+		if (n.locked) result.locked = n.locked;
+
+		// Recursively process children
+		if (n.children) {
+			result.children = n.children.map((child: any) => filterForDevelopment(child));
+		}
+
+		return result;
+	};
+
 	server.tool(
 		"figma_get_file_data",
-		"Get full file structure and document tree. WARNING: Can consume large amounts of tokens. NOT recommended for component descriptions (use figma_get_component instead). Best for understanding file structure or finding component nodeIds. Start with verbosity='summary' and depth=1 for initial exploration. Batch-compatible.",
+		"Get file structure and document tree. WARNING: Can consume large tokens. Start with verbosity='summary' and depth=1. Use scope='plugin' for plugin development (filtered to IDs, structure, and plugin data; allows depth up to 5). NOT for component descriptions (use figma_get_component). Batch-compatible.",
 		{
 			fileUrl: z
 				.string()
 				.url()
 				.optional()
 				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). Auto-detected from CDP browser or WebSocket Desktop Bridge connection. Only required if neither is connected."
+					"Figma file URL. Auto-detected from active connection."
 				),
 			depth: z
 				.number()
 				.min(0)
-				.max(3)
+				.max(5)
 				.optional()
 				.default(1)
 				.describe(
-					"How many levels of children to include (default: 1, max: 3). Start with 1 to prevent context exhaustion. Use 0 for full tree only when absolutely necessary."
+					"How many levels of children to include (default: 1). General scope: max 3. Plugin scope: max 5 (safe due to aggressive filtering)."
+				),
+			scope: z
+				.enum(["general", "plugin"])
+				.optional()
+				.default("general")
+				.describe(
+					"'general' (default): standard file tree with verbosity control (max depth 3). 'plugin': filtered for plugin development — IDs, structure, plugin data only; allows depth up to 5."
 				),
 			verbosity: z
 				.enum(["summary", "standard", "full"])
@@ -768,7 +903,7 @@ export function registerFigmaAPITools(
 				),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ fileUrl, depth, nodeIds, enrich, verbosity }) => {
+		async ({ fileUrl, depth, nodeIds, enrich, verbosity, scope }) => {
 			try {
 				// Initialize API client (required for file data - no Desktop Bridge alternative)
 				let api;
@@ -800,12 +935,49 @@ export function registerFigmaAPITools(
 					throw new Error(`Invalid Figma URL: ${url}`);
 				}
 
-				logger.info({ fileKey, depth, nodeIds, enrich, verbosity }, "Fetching file data");
+				const effectiveDepth = scope === "plugin" ? depth : Math.min(depth, 3);
+				logger.info({ fileKey, depth: effectiveDepth, nodeIds, enrich, verbosity, scope }, "Fetching file data");
 
-				const fileData = await api.getFile(fileKey, {
-					depth,
-					ids: nodeIds,
+				// When specific nodeIds are requested, use getNodes endpoint where depth
+			// is relative to each requested node (not the document root).
+			// getFile with ids+depth measures depth from root, so deep nodes return empty children.
+			let fileData: any;
+			if (nodeIds && nodeIds.length > 0) {
+				const nodesData = await api.getNodes(fileKey, nodeIds, {
+					depth: effectiveDepth,
 				});
+
+				// Normalize getNodes response to match getFile shape for downstream processing
+				const allComponents: any = {};
+				const allStyles: any = {};
+				const nodeDocuments: any[] = [];
+
+				for (const nodeId of nodeIds) {
+					const nodeEntry = nodesData.nodes?.[nodeId];
+					if (nodeEntry) {
+						if (nodeEntry.document) nodeDocuments.push(nodeEntry.document);
+						if (nodeEntry.components) Object.assign(allComponents, nodeEntry.components);
+						if (nodeEntry.styles) Object.assign(allStyles, nodeEntry.styles);
+					}
+				}
+
+				fileData = {
+					name: nodesData.name,
+					lastModified: nodesData.lastModified,
+					version: nodesData.version,
+					document: {
+						id: "0:0", name: "Document", type: "DOCUMENT",
+						children: nodeDocuments,
+					},
+					components: allComponents,
+					styles: allStyles,
+					nodes: nodesData.nodes,
+				};
+			} else {
+				fileData = await api.getFile(fileKey, {
+					depth: effectiveDepth,
+				});
+			}
 
 				// Walk document tree to find parent and siblings for a target node
 				const findNodeContext = (root: any, targetId: string): any | null => {
@@ -908,10 +1080,9 @@ export function registerFigmaAPITools(
 								...(fill.color && { color: fill.color }),
 							}));
 						}
-						if (node.strokes && node.strokes.length > 0) filtered.strokes = node.strokes;
 						if (node.strokeWeight) filtered.strokeWeight = node.strokeWeight;
 						if (node.cornerRadius) filtered.cornerRadius = node.cornerRadius;
-						if (node.effects && node.effects.length > 0) filtered.effects = node.effects;
+						if (node.effects && node.effects.length > 0) filtered.hasEffects = true;
 						if (node.opacity != null && node.opacity !== 1) filtered.opacity = node.opacity;
 						if (node.clipsContent != null) filtered.clipsContent = node.clipsContent;
 
@@ -927,6 +1098,80 @@ export function registerFigmaAPITools(
 					return stripUnnecessaryFields(node);
 				};
 
+				// Plugin scope: use filterForPlugin, skip enrichment/verbosity
+				if (scope === "plugin") {
+					const filteredDocument = filterForPlugin(fileData.document);
+
+					const finalResponse = {
+						fileKey,
+						name: fileData.name,
+						lastModified: fileData.lastModified,
+						version: fileData.version,
+						document: filteredDocument,
+						components: fileData.components
+							? Object.keys(fileData.components).length
+							: 0,
+						styles: fileData.styles
+							? Object.keys(fileData.styles).length
+							: 0,
+						...(nodeIds && {
+							requestedNodes: nodeIds,
+							nodes: fileData.nodes,
+						}),
+						metadata: {
+							purpose: "plugin_development",
+							note: "Optimized for plugin development. Contains IDs, structure, plugin data, and component relationships.",
+						},
+					};
+
+					// Use adaptive response to prevent context exhaustion
+					return adaptiveResponse(finalResponse, {
+						toolName: "figma_get_file_data",
+						compressionCallback: (adjustedLevel: string) => {
+							// For plugin format, we can't reduce much without breaking functionality
+							// But we can strip some less critical metadata
+							const compressNode = (node: any): any => {
+								const result: any = {
+									id: node.id,
+									name: node.name,
+									type: node.type,
+								};
+
+								// Keep only essential properties based on compression level
+								if (adjustedLevel !== "inventory") {
+									if (node.visible !== undefined) result.visible = node.visible;
+									if (node.locked !== undefined) result.locked = node.locked;
+									if (node.absoluteBoundingBox) result.absoluteBoundingBox = node.absoluteBoundingBox;
+									if (node.pluginData) result.pluginData = node.pluginData;
+									if (node.sharedPluginData) result.sharedPluginData = node.sharedPluginData;
+									if (node.componentId) result.componentId = node.componentId;
+								}
+
+								if (node.children) {
+									result.children = node.children.map(compressNode);
+								}
+
+								return result;
+							};
+
+							return {
+								...finalResponse,
+								document: compressNode(filteredDocument),
+								metadata: {
+									...finalResponse.metadata,
+									compressionApplied: adjustedLevel,
+								},
+							};
+						},
+						suggestedActions: [
+							"Reduce depth parameter (recommend 1-2)",
+							"Request specific nodeIds to narrow the scope",
+							"Filter to specific component types if possible",
+						],
+					});
+				}
+
+				// General scope: standard file tree with verbosity control
 				const filteredDocument = verbosity !== "full"
 					? filterNode(fileData.document, verbosity || "standard")
 					: fileData.document;
@@ -1044,7 +1289,7 @@ export function registerFigmaAPITools(
 				.url()
 				.optional()
 				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). Auto-detected from CDP browser or WebSocket Desktop Bridge connection. Only required if neither is connected."
+					"Figma file URL. Auto-detected from active connection."
 				),
 			includePublished: z
 				.boolean()
@@ -1256,7 +1501,8 @@ export function registerFigmaAPITools(
 						} else if (!isValid) {
 							logger.info({ fileKey, cacheAge: Date.now() - cacheEntry.timestamp }, 'Cache expired, will refresh');
 						} else if (refreshCache) {
-							logger.info({ fileKey }, 'Refresh cache requested, will fetch fresh data');
+							variablesCache.delete(fileKey);
+							logger.info({ fileKey }, 'Cache invalidated, fetching fresh data');
 						}
 					} else {
 						logger.info({ fileKey }, 'No cache entry found, will fetch data');
@@ -2411,8 +2657,8 @@ export function registerFigmaAPITools(
 
 	// Tool 10: Get Component Data
 	const componentDescription = isRemoteMode
-		? "Get component metadata or reconstruction specification. Two export formats: (1) 'metadata' (default) - comprehensive documentation with properties, variants, and design tokens for style guides and references, (2) 'reconstruction' - node tree specification compatible with Figma Component Reconstructor plugin for programmatic component creation. Batch-compatible."
-		: "Get component metadata or reconstruction specification. Two export formats: (1) 'metadata' (default) - comprehensive documentation with properties, variants, and design tokens for style guides and references, (2) 'reconstruction' - node tree specification compatible with Figma Component Reconstructor plugin for programmatic component creation. IMPORTANT: For local/unpublished components with metadata format, ensure the Figma Desktop Bridge plugin is running (Right-click in Figma → Plugins → Development → Figma Desktop Bridge) to get complete description data. Batch-compatible.";
+		? "Get component data in multiple formats: 'metadata' (default) — properties, variants, design tokens; 'reconstruction' — node tree spec for Reconstructor plugin; 'development' — filtered layout/visual props + optional image for UI implementation. Batch-compatible."
+		: "Get component data in multiple formats: 'metadata' (default) — properties, variants, design tokens; 'reconstruction' — node tree spec for Reconstructor plugin; 'development' — filtered layout/visual props + optional image for UI implementation. For local/unpublished components, ensure the Desktop Bridge plugin is running. Batch-compatible.";
 	server.tool(
 		"figma_get_component",
 		componentDescription,
@@ -2422,18 +2668,21 @@ export function registerFigmaAPITools(
 				.url()
 				.optional()
 				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). Auto-detected from CDP browser or WebSocket Desktop Bridge connection. Only required if neither is connected."
+					"Figma file URL. Auto-detected from active connection."
 				),
 			nodeId: z
 				.string()
 				.describe("Component node ID (e.g., '123:456')"),
 			format: z
-				.enum(["metadata", "reconstruction"])
+				.enum(["metadata", "reconstruction", "development"])
 				.optional()
 				.default("metadata")
-				.describe(
-					"Export format: 'metadata' (default) for comprehensive documentation, 'reconstruction' for node tree specification compatible with Figma Component Reconstructor plugin"
-				),
+				.describe("Export format: 'metadata' (default) — comprehensive documentation with properties/variants/tokens. 'reconstruction' — node tree spec for Figma Component Reconstructor plugin. 'development' — filtered layout/visual/typography props + optional rendered image for UI implementation."),
+			includeImage: z
+				.boolean()
+				.optional()
+				.default(true)
+				.describe("Include rendered image (development format only, default: true)"),
 			enrich: z
 				.boolean()
 				.optional()
@@ -2442,7 +2691,7 @@ export function registerFigmaAPITools(
 				),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ fileUrl, nodeId, format = "metadata", enrich }) => {
+		async ({ fileUrl, nodeId, format = "metadata", includeImage = true, enrich }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
@@ -2457,6 +2706,66 @@ export function registerFigmaAPITools(
 				}
 
 				logger.info({ fileKey, nodeId, format, enrich }, "Fetching component data");
+
+				// DEVELOPMENT FORMAT: Uses REST API directly (no Desktop Bridge)
+				if (format === "development") {
+					let api;
+					try {
+						api = await getFigmaAPI();
+					} catch (apiError) {
+						const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
+						throw new Error(
+							`Cannot retrieve component for development. REST API authentication required.\n` +
+							`Error: ${errorMessage}\n\n` +
+							`To fix:\n` +
+							`1. Local mode: Set FIGMA_ACCESS_TOKEN environment variable\n` +
+							`2. Cloud mode: Authenticate via OAuth`
+						);
+					}
+
+					// Get node data with depth for children
+					const nodeData = await api.getNodes(fileKey, [nodeId], { depth: 2 });
+					const node = nodeData.nodes?.[nodeId]?.document;
+
+					if (!node) {
+						throw new Error(`Component not found: ${nodeId}`);
+					}
+
+					const componentData = filterForDevelopment(node);
+
+					// Get image if requested
+					let imageUrl = null;
+					if (includeImage) {
+						try {
+							const imageResult = await api.getImages(fileKey, nodeId, {
+								scale: 2,
+								format: "png",
+								contents_only: true,
+							});
+							imageUrl = imageResult.images[nodeId];
+						} catch (error) {
+							logger.warn({ error }, "Failed to render component image, continuing without it");
+						}
+					}
+
+					// Build response with component data and image URL
+					const responseData = {
+						fileKey,
+						nodeId,
+						imageUrl,
+						component: componentData,
+						metadata: {
+							purpose: "component_development",
+							note: imageUrl
+								? "Image URL provided above (valid for 30 days). Full component data optimized for UI implementation."
+								: "Full component data optimized for UI implementation.",
+						},
+					};
+
+					return adaptiveResponse(responseData, {
+						toolName: "figma_get_component (development)",
+					});
+				}
 
 				// PRIORITY 1: Try Desktop Bridge plugin UI first (has reliable description field!)
 				if (getDesktopConnector || (getBrowserManager && ensureInitialized)) {
@@ -2720,7 +3029,7 @@ export function registerFigmaAPITools(
 				.url()
 				.optional()
 				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). Auto-detected from CDP browser or WebSocket Desktop Bridge connection. Only required if neither is connected."
+					"Figma file URL. Auto-detected from active connection."
 				),
 			verbosity: z
 				.enum(["summary", "standard", "full"])
@@ -2896,700 +3205,173 @@ export function registerFigmaAPITools(
 		}
 	);
 
-	// Tool 12: Get Component Image (Visual Reference)
+	// Tool: Screenshot (unified — plugin or REST API)
 	server.tool(
-		"figma_get_component_image",
-		"Render a specific component or node as an image (PNG, JPG, SVG, PDF). Returns image URL valid for 30 days. Use when user asks for: component screenshot, visual preview, rendered output, or 'show me'. Not suited for component metadata/properties (use figma_get_component) or code/layout data (use figma_get_component_for_development). Call as a standalone request rather than inside figma_batch, since image responses are large.",
-		{
-			fileUrl: z
-				.string()
-				.url()
-				.optional()
-				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). Auto-detected from CDP browser or WebSocket Desktop Bridge connection. Only required if neither is connected."
-				),
-			nodeId: z
-				.string()
-				.describe("Component node ID to render as image (e.g., '695:313')"),
-			scale: z
-				.number()
-				.min(0.01)
-				.max(4)
-				.optional()
-				.default(1)
-				.describe("Image scale factor (0.01-4, default: 1). Use 2 for higher resolution when inspecting fine details."),
-			format: z
-				.enum(["png", "jpg", "svg", "pdf"])
-				.optional()
-				.default("jpg")
-				.describe("Image format (default: jpg for smaller payloads). Use png for transparency or pixel precision."),
-		},
-		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ fileUrl, nodeId, scale, format }) => {
-			try {
-				let api;
-				try {
-					api = await getFigmaAPI();
-				} catch (apiError) {
-					const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-					throw new Error(
-						`Cannot render component image. REST API authentication required.\n` +
-						`Error: ${errorMessage}\n\n` +
-						`To fix:\n` +
-						`1. Local mode: Set FIGMA_ACCESS_TOKEN environment variable\n` +
-						`2. Cloud mode: Authenticate via OAuth\n\n` +
-						`Note: For component screenshots, figma_take_screenshot may work as browser-based alternative ` +
-						`if you've called figma_navigate first.`
-					);
-				}
+		"figma_screenshot",
+		`Capture a screenshot of a Figma node. Returns a base64 image for visual analysis.
 
-				const url = fileUrl || getCurrentUrl();
-				if (!url) {
-					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode)."
-					);
-				}
+Sources:
+- "plugin" (default): Uses Desktop Bridge exportAsync — shows current runtime state, reliable after changes. Requires plugin connection.
+- "api": Uses REST API image render — works without plugin but may show stale state. Supports return_url for URL-only mode.
 
-				const fileKey = extractFileKey(url);
-				if (!fileKey) {
-					throw new Error(`Invalid Figma URL: ${url}`);
-				}
-
-				logger.info({ fileKey, nodeId, scale, format }, "Rendering component image");
-
-				// First, fetch the node to check if it's a COMPONENT_SET
-				const fileData = await api.getNodes(fileKey, [nodeId]);
-				const node = fileData.nodes?.[nodeId]?.document;
-
-				if (!node) {
-					throw new Error(
-						`Node ${nodeId} not found in file ${fileKey}. Please verify the node ID is correct. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_search_components.]`
-					);
-				}
-
-				// Check if this is a COMPONENT_SET - cannot be rendered as image
-				if (node.type === 'COMPONENT_SET') {
-					const variants = listVariants(node);
-
-					return {
-						content: [
-							{
-								type: "text",
-								text: JSON.stringify(
-									{
-										error: "COMPONENT_SET_NOT_RENDERABLE",
-										message: "Node is a COMPONENT_SET which cannot be rendered. Please use a specific variant component ID instead.",
-										componentName: node.name,
-										availableVariants: variants,
-										instructions: [
-											"1. In Figma, expand the component set to see individual variants",
-											"2. Select the specific variant you want to render",
-											"3. Copy the node ID of that variant",
-											"4. Use figma_get_component_image with that variant's node ID"
-										],
-										note: "COMPONENT_SET is a container for variants. Only individual variant components can be rendered as images."
-									}
-								),
-							},
-						],
-					};
-				}
-
-				// Call the new getImages method
-				const result = await api.getImages(fileKey, nodeId, {
-					scale,
-					format,
-					contents_only: true,
-				});
-
-				const imageUrl = result.images[nodeId];
-
-				if (!imageUrl) {
-					throw new Error(
-						`Failed to render image for node ${nodeId}. The node may not exist or may not be renderable.`
-					);
-				}
-
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify(
-								{
-									fileKey,
-									nodeId,
-									imageUrl,
-									scale,
-									format,
-									expiresIn: "30 days",
-									note: "Use this image as visual reference for component development. Image URLs expire after 30 days.",
-								}
-							),
-						},
-					],
-				};
-			} catch (error) {
-				logger.error({ error }, "Failed to render component image");
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify(
-								{
-									error: errorMessage,
-									message: "Failed to render component image",
-									hint: "Make sure the node ID is correct and the component is renderable",
-								}
-							),
-						},
-					],
-					isError: true,
-				};
-			}
-		}
-	);
-
-	// Tool 13: Get Component for Development (UI Implementation)
-	server.tool(
-		"figma_get_component_for_development",
-		"Get component data optimized for UI implementation, includes rendered image + filtered implementation context (layout, typography, visual properties). Use when user asks to: 'build this component', 'implement this in React/Vue', 'generate code for', or needs both visual reference and technical specs. Automatically includes 2x scale image unless includeImage=false. Best for: UI development, code generation, design-to-code workflows. For just metadata, use figma_get_component; for just image, use figma_get_component_image.",
-		{
-			fileUrl: z
-				.string()
-				.url()
-				.optional()
-				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). REQUIRED unless figma_navigate was already called."
-				),
-			nodeId: z
-				.string()
-				.describe("Component node ID to get data for (e.g., '695:313')"),
-			includeImage: z
-				.boolean()
-				.optional()
-				.default(true)
-				.describe("Include rendered image for visual reference (default: true)"),
-		},
-		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ fileUrl, nodeId, includeImage }) => {
-			try {
-				let api;
-				try {
-					api = await getFigmaAPI();
-				} catch (apiError) {
-					const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-					throw new Error(
-						`Cannot retrieve component for development. REST API authentication required.\n` +
-						`Error: ${errorMessage}\n\n` +
-						`To fix:\n` +
-						`1. Local mode: Set FIGMA_ACCESS_TOKEN environment variable\n` +
-						`2. Cloud mode: Authenticate via OAuth\n\n` +
-						`Note: For component metadata, figma_get_component has Desktop Bridge fallback ` +
-						`that works without token (requires figma_navigate first).`
-					);
-				}
-
-				const url = fileUrl || getCurrentUrl();
-				if (!url) {
-					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode)."
-					);
-				}
-
-				const fileKey = extractFileKey(url);
-				if (!fileKey) {
-					throw new Error(`Invalid Figma URL: ${url}`);
-				}
-
-				logger.info({ fileKey, nodeId, includeImage }, "Fetching component for development");
-
-				// Get node data with depth for children
-				const nodeData = await api.getNodes(fileKey, [nodeId], { depth: 2 });
-				const node = nodeData.nodes?.[nodeId]?.document;
-
-				if (!node) {
-					throw new Error(`Component not found: ${nodeId}`);
-				}
-
-				// Filter to visual/layout properties only
-				const filterForDevelopment = (n: any): any => {
-					if (!n) return n;
-
-					const result: any = {
-						id: n.id,
-						name: n.name,
-						type: n.type,
-						description: n.description,
-						descriptionMarkdown: n.descriptionMarkdown,
-					};
-
-					// Layout & positioning
-					if (n.absoluteBoundingBox) result.absoluteBoundingBox = n.absoluteBoundingBox;
-					if (n.relativeTransform) result.relativeTransform = n.relativeTransform;
-					if (n.size) result.size = n.size;
-					if (n.constraints) result.constraints = n.constraints;
-					if (n.layoutAlign) result.layoutAlign = n.layoutAlign;
-					if (n.layoutGrow) result.layoutGrow = n.layoutGrow;
-					if (n.layoutPositioning) result.layoutPositioning = n.layoutPositioning;
-
-					// Auto-layout
-					if (n.layoutMode) result.layoutMode = n.layoutMode;
-					if (n.primaryAxisSizingMode) result.primaryAxisSizingMode = n.primaryAxisSizingMode;
-					if (n.counterAxisSizingMode) result.counterAxisSizingMode = n.counterAxisSizingMode;
-					if (n.primaryAxisAlignItems) result.primaryAxisAlignItems = n.primaryAxisAlignItems;
-					if (n.counterAxisAlignItems) result.counterAxisAlignItems = n.counterAxisAlignItems;
-					if (n.paddingLeft !== undefined) result.paddingLeft = n.paddingLeft;
-					if (n.paddingRight !== undefined) result.paddingRight = n.paddingRight;
-					if (n.paddingTop !== undefined) result.paddingTop = n.paddingTop;
-					if (n.paddingBottom !== undefined) result.paddingBottom = n.paddingBottom;
-					if (n.itemSpacing !== undefined) result.itemSpacing = n.itemSpacing;
-					if (n.itemReverseZIndex) result.itemReverseZIndex = n.itemReverseZIndex;
-					if (n.strokesIncludedInLayout) result.strokesIncludedInLayout = n.strokesIncludedInLayout;
-
-					// Visual properties
-					if (n.fills) result.fills = n.fills;
-					if (n.strokes) result.strokes = n.strokes;
-					if (n.strokeWeight !== undefined) result.strokeWeight = n.strokeWeight;
-					if (n.strokeAlign) result.strokeAlign = n.strokeAlign;
-					if (n.strokeCap) result.strokeCap = n.strokeCap;
-					if (n.strokeJoin) result.strokeJoin = n.strokeJoin;
-					if (n.dashPattern) result.dashPattern = n.dashPattern;
-					if (n.cornerRadius !== undefined) result.cornerRadius = n.cornerRadius;
-					if (n.rectangleCornerRadii) result.rectangleCornerRadii = n.rectangleCornerRadii;
-					if (n.effects) result.effects = n.effects;
-					if (n.opacity !== undefined) result.opacity = n.opacity;
-					if (n.blendMode) result.blendMode = n.blendMode;
-					if (n.isMask) result.isMask = n.isMask;
-					if (n.clipsContent) result.clipsContent = n.clipsContent;
-
-					// Typography
-					if (n.characters) result.characters = n.characters;
-					if (n.style) result.style = n.style;
-					if (n.characterStyleOverrides) result.characterStyleOverrides = n.characterStyleOverrides;
-					if (n.styleOverrideTable) result.styleOverrideTable = n.styleOverrideTable;
-
-					// Component properties & variants
-					if (n.componentProperties) result.componentProperties = n.componentProperties;
-					if (n.componentPropertyDefinitions) result.componentPropertyDefinitions = n.componentPropertyDefinitions;
-					if (n.variantProperties) result.variantProperties = n.variantProperties;
-					if (n.componentId) result.componentId = n.componentId;
-
-					// State
-					if (n.visible !== undefined) result.visible = n.visible;
-					if (n.locked) result.locked = n.locked;
-
-					// Recursively process children
-					if (n.children) {
-						result.children = n.children.map((child: any) => filterForDevelopment(child));
-					}
-
-					return result;
-				};
-
-				const componentData = filterForDevelopment(node);
-
-				// Get image if requested
-				let imageUrl = null;
-				if (includeImage) {
-					try {
-						const imageResult = await api.getImages(fileKey, nodeId, {
-							scale: 2,
-							format: "png",
-							contents_only: true,
-						});
-						imageUrl = imageResult.images[nodeId];
-					} catch (error) {
-						logger.warn({ error }, "Failed to render component image, continuing without it");
-					}
-				}
-
-				// Build response with component data and image URL
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify(
-								{
-									fileKey,
-									nodeId,
-									imageUrl,
-									component: componentData,
-									metadata: {
-										purpose: "component_development",
-										note: imageUrl
-											? "Image URL provided above (valid for 30 days). Full component data optimized for UI implementation."
-											: "Full component data optimized for UI implementation.",
-									},
-								}
-							),
-						},
-					],
-				};
-			} catch (error) {
-				logger.error({ error }, "Failed to get component for development");
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify(
-								{
-									error: errorMessage,
-									message: "Failed to retrieve component development data",
-								}
-							),
-						},
-					],
-					isError: true,
-				};
-			}
-		}
-	);
-
-	// Tool 14: Get File for Plugin Development
-	server.tool(
-		"figma_get_file_for_plugin",
-		"Get file data optimized for plugin development with filtered properties (IDs, structure, plugin data, component relationships). Excludes visual properties (fills, strokes, effects) to reduce payload. Use when user asks for: plugin development, file structure for manipulation, node IDs for plugin API. NOT for component descriptions (use figma_get_component). NOT for visual/styling data (use figma_get_component_for_development). Supports deeper tree traversal (max depth=5) than figma_get_file_data.",
-		{
-			fileUrl: z
-				.string()
-				.url()
-				.optional()
-				.describe(
-					"Figma file URL (e.g., https://figma.com/design/abc123). REQUIRED unless figma_navigate was already called."
-				),
-			depth: z
-				.number()
-				.min(0)
-				.max(5)
-				.optional()
-				.default(2)
-				.describe(
-					"How many levels of children to include (default: 2, max: 5). Higher depths are safe here due to filtering."
-				),
-			nodeIds: z
-				.array(z.string())
-				.optional()
-				.describe("Specific node IDs to retrieve (optional)"),
-		},
-		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ fileUrl, depth, nodeIds }) => {
-			try {
-				let api;
-				try {
-					api = await getFigmaAPI();
-				} catch (apiError) {
-					const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-					throw new Error(
-						`Cannot retrieve file data for plugin development. REST API authentication required.\n` +
-						`Error: ${errorMessage}\n\n` +
-						`To fix:\n` +
-						`1. Local mode: Set FIGMA_ACCESS_TOKEN environment variable\n` +
-						`2. Cloud mode: Authenticate via OAuth`
-					);
-				}
-
-				const url = fileUrl || getCurrentUrl();
-				if (!url) {
-					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode)."
-					);
-				}
-
-				const fileKey = extractFileKey(url);
-				if (!fileKey) {
-					throw new Error(`Invalid Figma URL: ${url}`);
-				}
-
-				logger.info({ fileKey, depth, nodeIds }, "Fetching file data for plugin development");
-
-				const fileData = await api.getFile(fileKey, {
-					depth,
-					ids: nodeIds,
-				});
-
-				// Filter to plugin-relevant properties only
-				const filterForPlugin = (node: any): any => {
-					if (!node) return node;
-
-					const result: any = {
-						id: node.id,
-						name: node.name,
-						type: node.type,
-						description: node.description,
-						descriptionMarkdown: node.descriptionMarkdown,
-					};
-
-					// Navigation & structure
-					if (node.visible !== undefined) result.visible = node.visible;
-					if (node.locked) result.locked = node.locked;
-					if (node.removed) result.removed = node.removed;
-
-					// Lightweight bounds (just position/size)
-					if (node.absoluteBoundingBox) {
-						result.bounds = {
-							x: node.absoluteBoundingBox.x,
-							y: node.absoluteBoundingBox.y,
-							width: node.absoluteBoundingBox.width,
-							height: node.absoluteBoundingBox.height,
-						};
-					}
-
-					// Plugin data (CRITICAL for plugins)
-					if (node.pluginData) result.pluginData = node.pluginData;
-					if (node.sharedPluginData) result.sharedPluginData = node.sharedPluginData;
-
-					// Component relationships (important for plugins)
-					if (node.componentId) result.componentId = node.componentId;
-					if (node.mainComponent) result.mainComponent = node.mainComponent;
-					if (node.componentPropertyReferences) result.componentPropertyReferences = node.componentPropertyReferences;
-					if (node.instanceOf) result.instanceOf = node.instanceOf;
-					if (node.exposedInstances) result.exposedInstances = node.exposedInstances;
-
-					// Component properties (for manipulation)
-					if (node.componentProperties) result.componentProperties = node.componentProperties;
-
-					// Characters for text nodes (plugins often need this)
-					if (node.characters !== undefined) result.characters = node.characters;
-
-					// Recursively process children
-					if (node.children) {
-						result.children = node.children.map((child: any) => filterForPlugin(child));
-					}
-
-					return result;
-				};
-
-				const filteredDocument = filterForPlugin(fileData.document);
-
-				const finalResponse = {
-					fileKey,
-					name: fileData.name,
-					lastModified: fileData.lastModified,
-					version: fileData.version,
-					document: filteredDocument,
-					components: fileData.components
-						? Object.keys(fileData.components).length
-						: 0,
-					styles: fileData.styles
-						? Object.keys(fileData.styles).length
-						: 0,
-					...(nodeIds && {
-						requestedNodes: nodeIds,
-						nodes: fileData.nodes,
-					}),
-					metadata: {
-						purpose: "plugin_development",
-						note: "Optimized for plugin development. Contains IDs, structure, plugin data, and component relationships.",
-					},
-				};
-
-				// Use adaptive response to prevent context exhaustion
-				return adaptiveResponse(finalResponse, {
-					toolName: "figma_get_file_for_plugin",
-					compressionCallback: (adjustedLevel: string) => {
-						// For plugin format, we can't reduce much without breaking functionality
-						// But we can strip some less critical metadata
-						const compressNode = (node: any): any => {
-							const result: any = {
-								id: node.id,
-								name: node.name,
-								type: node.type,
-							};
-
-							// Keep only essential properties based on compression level
-							if (adjustedLevel !== "inventory") {
-								if (node.visible !== undefined) result.visible = node.visible;
-								if (node.locked !== undefined) result.locked = node.locked;
-								if (node.absoluteBoundingBox) result.absoluteBoundingBox = node.absoluteBoundingBox;
-								if (node.pluginData) result.pluginData = node.pluginData;
-								if (node.sharedPluginData) result.sharedPluginData = node.sharedPluginData;
-								if (node.componentId) result.componentId = node.componentId;
-							}
-
-							if (node.children) {
-								result.children = node.children.map(compressNode);
-							}
-
-							return result;
-						};
-
-						return {
-							...finalResponse,
-							document: compressNode(filteredDocument),
-							metadata: {
-								...finalResponse.metadata,
-								compressionApplied: adjustedLevel,
-							},
-						};
-					},
-					suggestedActions: [
-						"Reduce depth parameter (recommend 1-2)",
-						"Request specific nodeIds to narrow the scope",
-						"Filter to specific component types if possible",
-					],
-				});
-			} catch (error) {
-				logger.error({ error }, "Failed to get file for plugin");
-				const errorMessage =
-					error instanceof Error ? error.message : String(error);
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify(
-								{
-									error: errorMessage,
-									message: "Failed to retrieve file data for plugin development",
-								}
-							),
-						},
-					],
-					isError: true,
-				};
-			}
-		}
-	);
-
-	// Tool 15: Capture Screenshot via Plugin (Desktop Bridge)
-	// This uses exportAsync() which reads the current plugin runtime state, not the cloud state
-	// Solves race condition where REST API screenshots show stale data after changes
-	server.tool(
-		"figma_capture_screenshot",
-		"Capture a screenshot of a node using the plugin's exportAsync API. Captures the current state from the plugin runtime (not cloud state like REST API), making it reliable for validating changes immediately after making them. Use this instead of figma_get_component_image when verifying that changes were applied correctly. Requires Desktop Bridge connection. Call as a standalone request rather than inside figma_batch, since image responses are large.",
+Call as standalone (not inside figma_batch) — image responses are large.`,
 		{
 			nodeId: z
 				.string()
 				.optional()
-				.describe(
-					"ID of the node to capture (e.g., '1:234'). If not provided, captures the current page."
-				),
-			format: z
-				.enum(["PNG", "JPG", "SVG"])
+				.describe("Node ID to capture (e.g., '1:234'). If omitted, captures current page (plugin) or extracts from URL (api)."),
+			source: z
+				.enum(["plugin", "api"])
 				.optional()
-				.default("JPG")
-				.describe("Image format (default: JPG for smaller payloads). Use PNG when transparency or pixel-perfect precision matters."),
+				.default("plugin")
+				.describe("Screenshot source: 'plugin' (default, live state) or 'api' (REST, may be stale)"),
 			scale: z
 				.number()
 				.min(0.5)
 				.max(4)
 				.optional()
 				.default(1)
-				.describe("Scale factor (default: 1). Use 2 for higher resolution when inspecting fine details."),
+				.describe("Scale factor (default: 1)"),
+			format: z
+				.enum(["png", "jpg", "svg", "PNG", "JPG", "SVG", "pdf"])
+				.optional()
+				.default("jpg")
+				.describe("Image format (default: jpg)"),
+			fileUrl: z
+				.string()
+				.url()
+				.optional()
+				.describe("Figma file URL (for api source). Auto-detected from active connection."),
+			return_url: z
+				.boolean()
+				.optional()
+				.default(false)
+				.describe("Return image URL only, valid 30 days (api source only)."),
 		},
-		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-		async ({ nodeId, format, scale }) => {
-			try {
-				logger.info({ nodeId, format, scale }, "Capturing screenshot via Desktop Bridge");
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+		async ({ nodeId, source, scale, format, fileUrl, return_url }) => {
+			// Normalize format to lowercase for REST API, uppercase for plugin
+			const formatLower = format.toLowerCase() as "png" | "jpg" | "svg" | "pdf";
+			const formatUpper = format.toUpperCase() as "PNG" | "JPG" | "SVG";
 
-				let result = null;
+			if (source === "plugin") {
+				// Plugin-based screenshot via Desktop Bridge
+				try {
+					logger.info({ nodeId, format: formatUpper, scale }, "Capturing screenshot via Desktop Bridge");
 
-				// Use the connector abstraction (supports both CDP and WebSocket)
-				if (getDesktopConnector) {
-					const connector = await getDesktopConnector();
-					logger.info({ transport: connector.getTransportType?.() || 'unknown' }, "Screenshot via connector");
-					result = await connector.captureScreenshot(nodeId || '', { format, scale });
-					// Wrap in expected format only if connector returns raw data without a success flag
-					if (result && typeof result.success === 'undefined' && result.image) {
-						result = { success: true, image: result };
-					}
-				}
+					let result = null;
 
-				// Legacy CDP fallback (only when no connector factory is available)
-				if (!result && !getDesktopConnector) {
-					const browserManager = getBrowserManager?.();
-					if (!browserManager) {
-						throw new Error(
-							"Desktop Bridge not available. To capture screenshots:\n" +
-							"1. Open your Figma file in Figma Desktop\n" +
-							"2. Install and run the 'Figma Console MCP' plugin\n" +
-							"3. Ensure the plugin shows 'MCP ready' status"
-						);
-					}
-
-					if (ensureInitialized) {
-						await ensureInitialized();
-					}
-
-					const page = await browserManager.getPage();
-					const frames = page.frames();
-
-					for (const frame of frames) {
-						try {
-							const hasFunction = await frame.evaluate('typeof window.captureScreenshot === "function"');
-							if (hasFunction) {
-								result = await frame.evaluate(
-									`window.captureScreenshot(${JSON.stringify(nodeId || '')}, ${JSON.stringify({ format, scale })})`
-								);
-								break;
-							}
-						} catch {
-							continue;
+					if (getDesktopConnector) {
+						const connector = await getDesktopConnector();
+						result = await connector.captureScreenshot(nodeId || '', { format: formatUpper, scale });
+						if (result && typeof result.success === 'undefined' && result.image) {
+							result = { success: true, image: result };
 						}
 					}
+
+					if (!result && !getDesktopConnector) {
+						const browserManager = getBrowserManager?.();
+						if (!browserManager) {
+							throw new Error("Desktop Bridge not available. Use source='api' for REST API screenshots, or open the Desktop Bridge plugin in Figma.");
+						}
+						if (ensureInitialized) await ensureInitialized();
+						const page = await browserManager.getPage();
+						for (const frame of page.frames()) {
+							try {
+								const hasFunction = await frame.evaluate('typeof window.captureScreenshot === "function"');
+								if (hasFunction) {
+									result = await frame.evaluate(
+										`window.captureScreenshot(${JSON.stringify(nodeId || '')}, ${JSON.stringify({ format: formatUpper, scale })})`
+									);
+									break;
+								}
+							} catch { continue; }
+						}
+					}
+
+					if (!result) throw new Error("Desktop Bridge plugin not found. Use source='api' or ensure the plugin is running.");
+					if (!result.success) throw new Error(result.error || "Screenshot capture failed");
+
+					const mimeType = formatUpper === "JPG" ? "image/jpeg" : formatUpper === "SVG" ? "image/svg+xml" : "image/png";
+
+					return {
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify({
+									success: true,
+									source: "plugin",
+									image: { format: result.image.format, scale: result.image.scale, byteLength: result.image.byteLength, node: result.image.node, bounds: result.image.bounds },
+								}),
+							},
+							{ type: "image", data: result.image.base64, mimeType },
+						],
+					};
+				} catch (error) {
+					logger.error({ error }, "Failed to capture screenshot via plugin");
+					return {
+						content: [{ type: "text", text: JSON.stringify({ error: error instanceof Error ? error.message : String(error), source: "plugin" }) }],
+						isError: true,
+					};
 				}
+			} else {
+				// REST API screenshot
+				try {
+					const api = await getFigmaAPI();
+					const url = fileUrl || getCurrentUrl();
+					if (!url) throw new Error("No Figma file URL available. Pass fileUrl or ensure a connection is active.");
 
-				if (!result) {
-					throw new Error(
-						"Desktop Bridge plugin not found. Ensure the 'Figma Console MCP' plugin is running in Figma Desktop."
-					);
+					const fileKey = extractFileKey(url);
+					if (!fileKey) throw new Error(`Invalid Figma URL: ${url}`);
+
+					let targetNodeId = nodeId;
+					if (!targetNodeId) {
+						const urlObj = new URL(url);
+						const nodeIdParam = urlObj.searchParams.get("node-id");
+						if (nodeIdParam) targetNodeId = nodeIdParam.replace(/-/g, ":");
+					}
+					if (!targetNodeId) throw new Error("No node ID found. Provide nodeId or ensure the URL contains node-id.");
+
+					// Check for COMPONENT_SET
+					const fileData = await api.getNodes(fileKey, [targetNodeId]);
+					const node = fileData.nodes?.[targetNodeId]?.document;
+					if (!node) throw new Error(`Node ${targetNodeId} not found in file ${fileKey}.`);
+
+					if (node.type === 'COMPONENT_SET') {
+						const variants = listVariants(node);
+						return {
+							content: [{ type: "text", text: JSON.stringify({ error: "COMPONENT_SET_NOT_RENDERABLE", componentName: node.name, availableVariants: variants }) }],
+						};
+					}
+
+					const result = await api.getImages(fileKey, targetNodeId, { scale, format: formatLower, contents_only: true });
+					const imageUrl = result.images[targetNodeId];
+					if (!imageUrl) throw new Error(`Failed to render image for node ${targetNodeId}.`);
+
+					if (return_url) {
+						return { content: [{ type: "text", text: JSON.stringify({ fileKey, nodeId: targetNodeId, imageUrl, scale, format: formatLower, expiresIn: "30 days" }) }] };
+					}
+
+					const imageResponse = await fetch(imageUrl);
+					if (!imageResponse.ok) throw new Error(`Failed to fetch image: ${imageResponse.status}`);
+
+					const imageBuffer = await imageResponse.arrayBuffer();
+					const base64Data = Buffer.from(imageBuffer).toString("base64");
+					const mimeType = formatLower === "jpg" ? "image/jpeg" : formatLower === "svg" ? "image/svg+xml" : formatLower === "pdf" ? "application/pdf" : "image/png";
+
+					return {
+						content: [
+							{ type: "text", text: JSON.stringify({ fileKey, nodeId: targetNodeId, source: "api", scale, format: formatLower, byteLength: imageBuffer.byteLength }) },
+							{ type: "image", data: base64Data, mimeType },
+						],
+					};
+				} catch (error) {
+					logger.error({ error }, "Failed to render image via API");
+					return {
+						content: [{ type: "text", text: JSON.stringify({ error: error instanceof Error ? error.message : String(error), source: "api" }) }],
+						isError: true,
+					};
 				}
-
-				if (!result.success) {
-					throw new Error(result.error || "Screenshot capture failed");
-				}
-
-				// Determine MIME type based on format
-				const mimeType = format === "JPG" ? "image/jpeg" : format === "SVG" ? "image/svg+xml" : "image/png";
-
-				logger.info({ byteLength: result.image.byteLength, format, mimeType }, "Screenshot captured via plugin");
-
-				// Return as MCP image content type so Claude can actually see and analyze the image
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								success: true,
-								image: {
-									format: result.image.format,
-									scale: result.image.scale,
-									byteLength: result.image.byteLength,
-									node: result.image.node,
-									bounds: result.image.bounds,
-								},
-								metadata: {
-									source: "plugin_export_async",
-									note: "Screenshot captured successfully. The image is included below for visual analysis. This shows the CURRENT plugin runtime state (guaranteed to reflect recent changes).",
-								},
-							}),
-						},
-						{
-							type: "image",
-							data: result.image.base64,
-							mimeType: mimeType,
-						},
-					],
-				};
-			} catch (error) {
-				logger.error({ error }, "Failed to capture screenshot");
-				const errorMessage = error instanceof Error ? error.message : String(error);
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								error: errorMessage,
-								message: "Failed to capture screenshot via Desktop Bridge",
-								suggestion: "Ensure Figma Desktop is open with the plugin running",
-							}),
-						},
-					],
-					isError: true,
-				};
 			}
 		}
 	);
@@ -3680,7 +3462,7 @@ export function registerFigmaAPITools(
 								success: true,
 								instance: result.instance,
 								metadata: {
-									note: "Instance properties updated successfully. Use figma_capture_screenshot to verify visual changes.",
+									note: "Instance properties updated successfully. Use figma_screenshot to verify visual changes.",
 								},
 							}),
 						},

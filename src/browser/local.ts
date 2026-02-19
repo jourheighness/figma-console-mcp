@@ -270,7 +270,7 @@ export class LocalBrowserManager implements IBrowserManager {
 	}
 
 	// Screenshot functionality removed - use Figma REST API's getImages() instead
-	// See: figma_take_screenshot and figma_get_component_image tools
+	// See: figma_screenshot tool
 
 	/**
 	 * Check if browser is connected

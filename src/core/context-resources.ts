@@ -131,7 +131,7 @@ export function registerContextResources(
 		'figma-context-components',
 		new ResourceTemplate('figma://context/{fileKey}/components', { list: listCallback(contextCache) }),
 		{
-			description: 'Component inventory for a Figma file: names, counts, and component sets. Use figma_get_component_keys to look up specific component keys for imports/instantiation.',
+			description: 'Component inventory for a Figma file: names, counts, and component sets. Use figma_find_components to look up specific component keys for imports/instantiation.',
 			mimeType: 'application/json',
 		},
 		async (_uri, variables) => {

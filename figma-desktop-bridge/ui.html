@@ -517,13 +517,28 @@
         .catch(function(err) { return { success: false, error: err.message || String(err) }; });
     };
 
-    // Set text content (for text nodes)
+    // Reparent a node (move to new parent)
+    window.reparentNode = (nodeId, newParentId, insertIndex) => {
+      var params = { nodeId: nodeId, newParentId: newParentId };
+      if (insertIndex !== undefined) params.insertIndex = insertIndex;
+      return window.sendPluginCommand('REPARENT_NODE', params)
+        .catch(function(err) { return { success: false, error: err.message || String(err) }; });
+    };
+
+    // Reorder a node (change z-order within parent)
+    window.reorderNode = (nodeId, index) => {
+      return window.sendPluginCommand('REORDER_NODE', { nodeId: nodeId, index: index })
+        .catch(function(err) { return { success: false, error: err.message || String(err) }; });
+    };
+
+    // Set text content (for text nodes) with full typography support
     window.setTextContent = (nodeId, text, options) => {
       var params = { nodeId: nodeId, text: text };
       if (options) {
-        if (options.fontSize) params.fontSize = options.fontSize;
-        if (options.fontWeight) params.fontWeight = options.fontWeight;
-        if (options.fontFamily) params.fontFamily = options.fontFamily;
+        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase'];
+        for (var i = 0; i < passthrough.length; i++) {
+          if (options[passthrough[i]] !== undefined) params[passthrough[i]] = options[passthrough[i]];
+        }
       }
       return window.sendPluginCommand('SET_TEXT_CONTENT', params)
         .catch(function(err) { return { success: false, error: err.message || String(err) }; });
@@ -614,6 +629,8 @@
         'CLONE_NODE': function(params) { return window.cloneNode(params.nodeId); },
         'DELETE_NODE': function(params) { return window.deleteNode(params.nodeId); },
         'RENAME_NODE': function(params) { return window.renameNode(params.nodeId, params.newName); },
+        'REPARENT_NODE': function(params) { return window.reparentNode(params.nodeId, params.newParentId, params.insertIndex); },
+        'REORDER_NODE': function(params) { return window.reorderNode(params.nodeId, params.index); },
         'SET_TEXT_CONTENT': function(params) { return window.setTextContent(params.nodeId, params.text, params); },
         'CREATE_CHILD_NODE': function(params) { return window.createChildNode(params.parentId, params.nodeType, params.properties); },
         'CAPTURE_SCREENSHOT': function(params) { return window.captureScreenshot(params.nodeId, params); },
@@ -1136,6 +1153,12 @@
           break;
         case 'RENAME_NODE_RESULT':
           handleResult('RENAME_NODE', 'node');
+          break;
+        case 'REPARENT_NODE_RESULT':
+          handleResult('REPARENT_NODE', 'node');
+          break;
+        case 'REORDER_NODE_RESULT':
+          handleResult('REORDER_NODE', 'node');
           break;
         case 'SET_TEXT_CONTENT_RESULT':
           handleResult('SET_TEXT_CONTENT', 'node');

@@ -1,7 +1,7 @@
 /**
  * Comment Tools Tests
  *
- * Unit tests for figma_get_comments, figma_post_comment, figma_delete_comment.
+ * Unit tests for the unified figma_comments tool (action: get | post | delete).
  * Tests the registerCommentTools() function with a mock McpServer and FigmaAPI.
  */
 
@@ -20,14 +20,20 @@ interface RegisteredTool {
 }
 
 function createMockServer() {
-	const tools: RegisteredTool[] = {};
+	const tools: Record<string, RegisteredTool> = {};
 	return {
-		tool: jest.fn((name: string, description: string, schema: any, handler: any) => {
-			(tools as any)[name] = { name, description, schema, handler };
+		tool: jest.fn((...args: any[]) => {
+			// server.tool() can be called with 4 or 5 args:
+			// (name, desc, schema, handler) or (name, desc, schema, annotations, handler)
+			const name = args[0];
+			const description = args[1];
+			const schema = args[2];
+			const handler = typeof args[3] === "function" ? args[3] : args[4];
+			tools[name] = { name, description, schema, handler };
 		}),
 		_tools: tools,
 		_getTool(name: string): RegisteredTool {
-			return (tools as any)[name];
+			return tools[name];
 		},
 	};
 }
@@ -70,18 +76,16 @@ describe("Comment Tools", () => {
 		);
 	});
 
-	it("registers all 3 comment tools", () => {
-		expect(server.tool).toHaveBeenCalledTimes(3);
+	it("registers a single figma_comments tool", () => {
+		expect(server.tool).toHaveBeenCalledTimes(1);
 		const names = server.tool.mock.calls.map((c: any[]) => c[0]);
-		expect(names).toContain("figma_get_comments");
-		expect(names).toContain("figma_post_comment");
-		expect(names).toContain("figma_delete_comment");
+		expect(names).toContain("figma_comments");
 	});
 
 	// -----------------------------------------------------------------------
-	// figma_get_comments
+	// action: get
 	// -----------------------------------------------------------------------
-	describe("figma_get_comments", () => {
+	describe("action: get", () => {
 		const sampleComments = [
 			{
 				id: "c1",
@@ -109,8 +113,8 @@ describe("Comment Tools", () => {
 		it("returns active comments by default (filters resolved)", async () => {
 			mockApi.getComments.mockResolvedValue({ comments: sampleComments });
 
-			const tool = server._getTool("figma_get_comments");
-			const result = await tool.handler({ as_md: false, include_resolved: false });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "get", as_md: false, include_resolved: false });
 
 			expect(result.isError).toBeUndefined();
 			const data = JSON.parse(result.content[0].text);
@@ -125,8 +129,8 @@ describe("Comment Tools", () => {
 		it("includes resolved comments when requested", async () => {
 			mockApi.getComments.mockResolvedValue({ comments: sampleComments });
 
-			const tool = server._getTool("figma_get_comments");
-			const result = await tool.handler({ as_md: false, include_resolved: true });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "get", as_md: false, include_resolved: true });
 
 			const data = JSON.parse(result.content[0].text);
 			expect(data.comments).toHaveLength(3);
@@ -136,8 +140,8 @@ describe("Comment Tools", () => {
 		it("passes as_md option to API", async () => {
 			mockApi.getComments.mockResolvedValue({ comments: [] });
 
-			const tool = server._getTool("figma_get_comments");
-			await tool.handler({ as_md: true, include_resolved: false });
+			const tool = server._getTool("figma_comments");
+			await tool.handler({ action: "get", as_md: true, include_resolved: false });
 
 			expect(mockApi.getComments).toHaveBeenCalledWith(MOCK_FILE_KEY, { as_md: true });
 		});
@@ -145,8 +149,9 @@ describe("Comment Tools", () => {
 		it("uses explicit fileUrl when provided", async () => {
 			mockApi.getComments.mockResolvedValue({ comments: [] });
 
-			const tool = server._getTool("figma_get_comments");
+			const tool = server._getTool("figma_comments");
 			await tool.handler({
+				action: "get",
 				fileUrl: "https://www.figma.com/design/xyz999/Other-File",
 				as_md: false,
 				include_resolved: false,
@@ -156,7 +161,6 @@ describe("Comment Tools", () => {
 		});
 
 		it("returns error when no URL available", async () => {
-			// Re-register with null getCurrentUrl
 			server = createMockServer();
 			registerCommentTools(
 				server as any,
@@ -164,8 +168,8 @@ describe("Comment Tools", () => {
 				() => null,
 			);
 
-			const tool = server._getTool("figma_get_comments");
-			const result = await tool.handler({ as_md: false, include_resolved: false });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "get", as_md: false, include_resolved: false });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
@@ -175,23 +179,23 @@ describe("Comment Tools", () => {
 		it("returns error on API failure", async () => {
 			mockApi.getComments.mockRejectedValue(new Error("Figma API error (403): Forbidden"));
 
-			const tool = server._getTool("figma_get_comments");
-			const result = await tool.handler({ as_md: false, include_resolved: false });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "get", as_md: false, include_resolved: false });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
-			expect(data.error).toBe("get_comments_failed");
+			expect(data.error).toBe("get_failed");
 			expect(data.message).toContain("403");
 		});
 	});
 
 	// -----------------------------------------------------------------------
-	// figma_post_comment
+	// action: post
 	// -----------------------------------------------------------------------
-	describe("figma_post_comment", () => {
+	describe("action: post", () => {
 		it("posts a basic comment", async () => {
-			const tool = server._getTool("figma_post_comment");
-			const result = await tool.handler({ message: "Hello from MCP!" });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "post", message: "Hello from MCP!" });
 
 			expect(result.isError).toBeUndefined();
 			expect(mockApi.postComment).toHaveBeenCalledWith(
@@ -206,8 +210,9 @@ describe("Comment Tools", () => {
 		});
 
 		it("posts a comment pinned to a node", async () => {
-			const tool = server._getTool("figma_post_comment");
+			const tool = server._getTool("figma_comments");
 			await tool.handler({
+				action: "post",
 				message: "Check this component",
 				node_id: "695:313",
 			});
@@ -221,8 +226,9 @@ describe("Comment Tools", () => {
 		});
 
 		it("posts a comment pinned to a node with offset", async () => {
-			const tool = server._getTool("figma_post_comment");
+			const tool = server._getTool("figma_comments");
 			await tool.handler({
+				action: "post",
 				message: "Here specifically",
 				node_id: "695:313",
 				x: 100,
@@ -238,8 +244,9 @@ describe("Comment Tools", () => {
 		});
 
 		it("posts a reply to an existing comment", async () => {
-			const tool = server._getTool("figma_post_comment");
+			const tool = server._getTool("figma_comments");
 			await tool.handler({
+				action: "post",
 				message: "I agree!",
 				reply_to_comment_id: "comment-456",
 			});
@@ -252,6 +259,15 @@ describe("Comment Tools", () => {
 			);
 		});
 
+		it("returns error when message is missing", async () => {
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "post" });
+
+			expect(result.isError).toBe(true);
+			const data = JSON.parse(result.content[0].text);
+			expect(data.error).toContain("message is required");
+		});
+
 		it("returns error when no URL available", async () => {
 			server = createMockServer();
 			registerCommentTools(
@@ -260,8 +276,8 @@ describe("Comment Tools", () => {
 				() => null,
 			);
 
-			const tool = server._getTool("figma_post_comment");
-			const result = await tool.handler({ message: "test" });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "post", message: "test" });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
@@ -271,29 +287,38 @@ describe("Comment Tools", () => {
 		it("returns error on API failure", async () => {
 			mockApi.postComment.mockRejectedValue(new Error("Figma API error (401): Unauthorized"));
 
-			const tool = server._getTool("figma_post_comment");
-			const result = await tool.handler({ message: "test" });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "post", message: "test" });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
-			expect(data.error).toBe("post_comment_failed");
+			expect(data.error).toBe("post_failed");
 			expect(data.message).toContain("401");
 		});
 	});
 
 	// -----------------------------------------------------------------------
-	// figma_delete_comment
+	// action: delete
 	// -----------------------------------------------------------------------
-	describe("figma_delete_comment", () => {
+	describe("action: delete", () => {
 		it("deletes a comment by ID", async () => {
-			const tool = server._getTool("figma_delete_comment");
-			const result = await tool.handler({ comment_id: "comment-123" });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "delete", comment_id: "comment-123" });
 
 			expect(result.isError).toBeUndefined();
 			expect(mockApi.deleteComment).toHaveBeenCalledWith(MOCK_FILE_KEY, "comment-123");
 			const data = JSON.parse(result.content[0].text);
 			expect(data.success).toBe(true);
 			expect(data.deleted_comment_id).toBe("comment-123");
+		});
+
+		it("returns error when comment_id is missing", async () => {
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "delete" });
+
+			expect(result.isError).toBe(true);
+			const data = JSON.parse(result.content[0].text);
+			expect(data.error).toContain("comment_id is required");
 		});
 
 		it("returns error when no URL available", async () => {
@@ -304,8 +329,8 @@ describe("Comment Tools", () => {
 				() => null,
 			);
 
-			const tool = server._getTool("figma_delete_comment");
-			const result = await tool.handler({ comment_id: "comment-123" });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "delete", comment_id: "comment-123" });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
@@ -315,18 +340,19 @@ describe("Comment Tools", () => {
 		it("returns error when comment not found", async () => {
 			mockApi.deleteComment.mockRejectedValue(new Error("Figma API error (404): Comment not found"));
 
-			const tool = server._getTool("figma_delete_comment");
-			const result = await tool.handler({ comment_id: "nonexistent" });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "delete", comment_id: "nonexistent" });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
-			expect(data.error).toBe("delete_comment_failed");
+			expect(data.error).toBe("delete_failed");
 			expect(data.message).toContain("404");
 		});
 
 		it("uses explicit fileUrl when provided", async () => {
-			const tool = server._getTool("figma_delete_comment");
+			const tool = server._getTool("figma_comments");
 			await tool.handler({
+				action: "delete",
 				fileUrl: "https://www.figma.com/design/xyz999/Other-File",
 				comment_id: "comment-789",
 			});
@@ -347,8 +373,8 @@ describe("Comment Tools", () => {
 				() => "https://example.com/not-figma",
 			);
 
-			const tool = server._getTool("figma_get_comments");
-			const result = await tool.handler({ as_md: false, include_resolved: false });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "get", as_md: false, include_resolved: false });
 
 			expect(result.isError).toBe(true);
 			const data = JSON.parse(result.content[0].text);
@@ -358,8 +384,8 @@ describe("Comment Tools", () => {
 		it("handles empty comments array", async () => {
 			mockApi.getComments.mockResolvedValue({ comments: [] });
 
-			const tool = server._getTool("figma_get_comments");
-			const result = await tool.handler({ as_md: false, include_resolved: false });
+			const tool = server._getTool("figma_comments");
+			const result = await tool.handler({ action: "get", as_md: false, include_resolved: false });
 
 			const data = JSON.parse(result.content[0].text);
 			expect(data.comments).toHaveLength(0);

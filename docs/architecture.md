@@ -93,11 +93,11 @@ The main server implements the Model Context Protocol with stdio transport for l
 |----------|-------|-----------|
 | Navigation | `figma_navigate`, `figma_get_status` | WebSocket / CDP |
 | Console | `figma_get_console_logs`, `figma_watch_console`, `figma_clear_console` | WebSocket / CDP |
-| Screenshots | `figma_take_screenshot`, `figma_capture_screenshot` | WebSocket / CDP |
+| Screenshots | `figma_take_screenshot`, `figma_screenshot` | WebSocket / CDP |
 | Design System | `figma_get_variables`, `figma_get_styles`, `figma_get_component` | REST API |
-| Design Creation | `figma_execute`, `figma_arrange_component_set` | WebSocket / CDP (Plugin) |
+| Design Creation | `figma_edit_node`, `figma_set_appearance`, `figma_arrange_component_set` | WebSocket / CDP (Plugin) |
 | Variables | `figma_create_variable`, `figma_update_variable`, etc. | WebSocket / CDP (Plugin) |
-| Real-Time | `figma_get_selection`, `figma_get_design_changes` | WebSocket only |
+| Real-Time | `figma_get_selection`, `figma_connection` (action: "changes") | WebSocket only |
 
 ---
 
@@ -149,7 +149,7 @@ The Desktop Bridge Plugin connects via WebSocket on port 9223. This is the recom
 
 **Features unique to WebSocket:**
 - Real-time selection tracking (`figma_get_selection`)
-- Document change monitoring (`figma_get_design_changes`)
+- Document change monitoring (`figma_connection` with action: "changes")
 - File identity tracking (file key, name, current page)
 - Plugin-context console capture
 - Instant availability check (no network timeout)
@@ -236,12 +236,12 @@ sequenceDiagram
     participant F as Figma
 
     U->>A: Create button
-    A->>M: figma_execute()
-    M->>B: Send code
+    A->>M: figma_create_child()
+    M->>B: Send command
     B->>F: createComponent()
     F-->>B: Node created
     B-->>M: {nodeId}
-    A->>M: capture_screenshot()
+    A->>M: figma_screenshot()
     M-->>A: Image
     A-->>U: Done
 ```

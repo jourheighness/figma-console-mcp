@@ -57,7 +57,20 @@ export interface IFigmaConnector {
   cloneNode(nodeId: string): Promise<any>;
   deleteNode(nodeId: string): Promise<any>;
   renameNode(nodeId: string, newName: string): Promise<any>;
-  setTextContent(nodeId: string, characters: string, options?: any): Promise<any>;
+  reparentNode(nodeId: string, newParentId: string, insertIndex?: number): Promise<any>;
+  reorderNode(nodeId: string, index: number): Promise<any>;
+  setTextContent(nodeId: string, characters: string | undefined, options?: {
+    fontSize?: number;
+    fontFamily?: string;
+    fontStyle?: string;
+    textAlignHorizontal?: string;
+    textAlignVertical?: string;
+    lineHeight?: { value?: number; unit: string };
+    letterSpacing?: { value: number; unit?: string };
+    textAutoResize?: string;
+    textDecoration?: string;
+    textCase?: string;
+  }): Promise<any>;
   createChildNode(parentId: string, nodeType: string, properties?: any): Promise<any>;
 
   // Screenshot & instance

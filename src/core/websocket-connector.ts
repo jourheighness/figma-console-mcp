@@ -241,12 +241,34 @@ export class WebSocketConnector implements IFigmaConnector {
     return this.wsServer.sendCommand('RENAME_NODE', { nodeId, newName });
   }
 
-  async setTextContent(nodeId: string, characters: string, options?: any): Promise<any> {
+  async reparentNode(nodeId: string, newParentId: string, insertIndex?: number): Promise<any> {
+    const params: any = { nodeId, newParentId };
+    if (insertIndex !== undefined) params.insertIndex = insertIndex;
+    return this.wsServer.sendCommand('REPARENT_NODE', params);
+  }
+
+  async reorderNode(nodeId: string, index: number): Promise<any> {
+    return this.wsServer.sendCommand('REORDER_NODE', { nodeId, index });
+  }
+
+  async setTextContent(nodeId: string, characters: string | undefined, options?: {
+    fontSize?: number;
+    fontFamily?: string;
+    fontStyle?: string;
+    textAlignHorizontal?: string;
+    textAlignVertical?: string;
+    lineHeight?: { value?: number; unit: string };
+    letterSpacing?: { value: number; unit?: string };
+    textAutoResize?: string;
+    textDecoration?: string;
+    textCase?: string;
+  }): Promise<any> {
     const params: any = { nodeId, text: characters };
     if (options) {
-      if (options.fontSize) params.fontSize = options.fontSize;
-      if (options.fontWeight) params.fontWeight = options.fontWeight;
-      if (options.fontFamily) params.fontFamily = options.fontFamily;
+      const passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase'] as const;
+      for (const key of passthrough) {
+        if ((options as any)[key] !== undefined) params[key] = (options as any)[key];
+      }
     }
     return this.wsServer.sendCommand('SET_TEXT_CONTENT', params);
   }

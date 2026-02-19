@@ -326,10 +326,9 @@ When you first use design system tools:
 - `figma_get_file_for_plugin` - Optimized file data
 
 ### ✏️ Design Creation (Local Mode + Desktop Bridge)
-- `figma_execute` - **Power tool**: Run any Figma Plugin API code to create designs
-  - Create frames, shapes, text, components
-  - Apply auto-layout, styles, effects
-  - Build complete UI mockups programmatically
+- `figma_edit_node` - **Unified node manipulation**: Resize, move, clone, delete, rename, reparent, reorder nodes
+- `figma_set_appearance` - **Visual styling**: Set fills, strokes, opacity, cornerRadius, effects, rotation, blendMode
+- `figma_manage_page` - **Page management**: Create, delete, rename, switch, reorder, list pages
 - `figma_arrange_component_set` - **Organize variants into professional component sets**
   - Convert multiple component variants into a proper Figma component set
   - Applies native purple dashed border visualization automatically
@@ -337,7 +336,7 @@ When you first use design system tools:
   - Row labels vertically centered with each grid row
   - Column headers horizontally centered with each column
   - Use natural language like "arrange these variants" or "organize as component set"
-- `figma_set_description` - **Document components with rich descriptions**
+- `figma_component_property` - **Component property management** (action: "set_description")
   - Add descriptions to components, component sets, and styles
   - Supports markdown formatting for rich documentation
   - Descriptions appear in Dev Mode for developers
@@ -355,9 +354,7 @@ When you first use design system tools:
 - `figma_delete_variable_collection` - Delete collections and all their variables
 - `figma_add_mode` - Add modes to collections (e.g., "Dark", "Mobile")
 - `figma_rename_mode` - Rename existing modes
-- `figma_batch_create_variables` - Create up to 100 variables in one call (10-50x faster)
-- `figma_batch_update_variables` - Update up to 100 variable values in one call
-- `figma_setup_design_tokens` - Create complete token system (collection + modes + variables) atomically
+- `figma_batch_variables` - Batch create, update, or setup complete token systems (action: "create", "update", "setup") — up to 100 variables in one call (10-50x faster)
 
 **📖 [Detailed Tool Documentation](docs/TOOLS.md)**
 
@@ -444,9 +441,9 @@ and a sticky footer with Save and Cancel buttons.
 ### How It Works
 
 1. **You describe what you want** in plain English
-2. **The AI searches your component library** using `figma_search_components` to find relevant building blocks
+2. **The AI searches your component library** using `figma_find_components` to find relevant building blocks
 3. **Components are instantiated** with proper variants and properties via `figma_instantiate_component`
-4. **Custom elements are created** using the full Figma Plugin API via `figma_execute`
+4. **Custom elements are created** using node manipulation tools like `figma_edit_node`, `figma_set_appearance`, and `figma_create_child`
 5. **Visual validation** automatically captures screenshots and iterates until the design looks right
 
 ### Who Benefits
@@ -515,7 +512,7 @@ The **Figma Desktop Bridge** plugin is the recommended way to connect Figma to t
 - Real-time selection tracking and document change monitoring
 
 **Write Operations:**
-- **Design Creation** - Create frames, shapes, text, components via `figma_execute`
+- **Design Creation** - Create and modify nodes via `figma_edit_node`, `figma_set_appearance`, `figma_create_child`
 - **Variable Management** - Full CRUD operations on variables and collections
 - **Mode Management** - Add and rename modes for multi-theme support
 
@@ -665,10 +662,10 @@ The architecture supports adding new apps with minimal boilerplate — each app 
 **Recent Releases:**
 - [x] **v1.10.0** - Multi-instance support (dynamic port fallback 9223–9232, multi-connection plugin, instance discovery)
 - [x] **v1.9.0** - Figma Comments tools, improved port conflict detection
-- [x] **v1.8.0** - WebSocket Bridge transport (CDP-free connectivity), real-time selection/document tracking, `figma_get_selection` + `figma_get_design_changes` tools
+- [x] **v1.8.0** - WebSocket Bridge transport (CDP-free connectivity), real-time selection/document tracking, `figma_get_selection` + `figma_connection` (action: "changes") tools
 - [x] **v1.7.0** - MCP Apps (Token Browser, Design System Dashboard), batch variable operations, design-code parity tools
 - [x] **v1.5.0** - Node manipulation tools, component property management, component set arrangement
-- [x] **v1.3.0** - Design creation via `figma_execute`, variable CRUD operations
+- [x] **v1.3.0** - Design creation tools, variable CRUD operations
 
 **Coming Next:**
 - [ ] **Component template library** - Common UI pattern generation

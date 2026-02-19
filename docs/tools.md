@@ -28,17 +28,13 @@ This guide provides detailed documentation for each tool, including when to use 
 | | `figma_get_component_image` | Just the component image | All |
 | | `figma_get_file_data` | File structure with verbosity control | All |
 | | `figma_get_file_for_plugin` | File data optimized for plugins | All |
-| | `figma_get_design_system_summary` | Overview of design system | Local |
-| | `figma_get_token_values` | Get variable values by mode | Local |
-| **✏️ Design Creation** | `figma_execute` | Run Figma Plugin API code | Local |
-| | `figma_arrange_component_set` | Organize variants with labels | Local |
-| | `figma_set_description` | Add component descriptions | Local |
-| **🧩 Components** | `figma_search_components` | Find components by name | Local |
-| | `figma_get_component_details` | Get component details | Local |
+| **✏️ Design Creation** | `figma_arrange_component_set` | Organize variants with labels | Local |
+| **🧩 Components** | `figma_find_components` | Find components by name, details, keys, or design system overview | Local |
 | | `figma_instantiate_component` | Create component instance | Local |
 | | `figma_add_component_property` | Add component property | Local |
 | | `figma_edit_component_property` | Edit component property | Local |
 | | `figma_delete_component_property` | Remove component property | Local |
+| | `figma_component_property` | Set description on components (action: "set_description") | Local |
 | **🔧 Variables** | `figma_create_variable_collection` | Create collections with modes | Local |
 | | `figma_create_variable` | Create new variables | Local |
 | | `figma_update_variable` | Update variable values | Local |
@@ -47,22 +43,13 @@ This guide provides detailed documentation for each tool, including when to use 
 | | `figma_delete_variable_collection` | Delete collections | Local |
 | | `figma_add_mode` | Add modes to collections | Local |
 | | `figma_rename_mode` | Rename modes | Local |
-| | `figma_batch_create_variables` | Create up to 100 variables at once | Local |
-| | `figma_batch_update_variables` | Update up to 100 variables at once | Local |
-| | `figma_setup_design_tokens` | Create collection + modes + variables atomically | Local |
+| | `figma_batch_variables` | Batch create, update, or setup complete token systems (action: "create", "update", "setup") | Local |
 | **🔍 Design-Code Parity** | `figma_check_design_parity` | Compare Figma specs vs code implementation | All |
 | | `figma_generate_component_doc` | Generate component documentation from Figma + code | All |
-| **💬 Comments** | `figma_get_comments` | Get comments on a Figma file | All |
-| | `figma_post_comment` | Post a comment, optionally pinned to a node | All |
-| | `figma_delete_comment` | Delete a comment by ID | All |
-| **📐 Node Manipulation** | `figma_resize_node` | Resize a node | Local |
-| | `figma_move_node` | Move a node | Local |
-| | `figma_clone_node` | Clone a node | Local |
-| | `figma_delete_node` | Delete a node | Local |
-| | `figma_rename_node` | Rename a node | Local |
+| **💬 Comments** | `figma_comments` | Get, post, or delete comments (action: "get", "post", "delete") | All |
+| **📐 Node Manipulation** | `figma_edit_node` | Resize, move, clone, delete, rename, reparent, reorder nodes | Local |
 | | `figma_set_text` | Set text content | Local |
-| | `figma_set_fills` | Set fill colors | Local |
-| | `figma_set_strokes` | Set stroke colors | Local |
+| | `figma_set_appearance` | Set fills, strokes, opacity, cornerRadius, effects, rotation, blendMode | Local |
 | | `figma_create_child` | Create child node | Local |
 
 ---
@@ -585,96 +572,6 @@ figma_get_file_for_plugin({
 
 > **⚠️ Requires Desktop Bridge Plugin**: These tools only work in Local Mode with the Desktop Bridge plugin running in Figma.
 
-### `figma_execute`
-
-**The Power Tool** - Execute any Figma Plugin API code to create designs, modify elements, or perform complex operations.
-
-**When to Use:**
-- Creating UI components (buttons, cards, modals, notifications)
-- Building frames with auto-layout
-- Adding text with specific fonts and styles
-- Creating shapes (rectangles, ellipses, vectors)
-- Applying effects, fills, and strokes
-- Creating pages or organizing layers
-- Any operation that requires the full Figma Plugin API
-
-**Usage:**
-```javascript
-figma_execute({
-  code: `
-    // Create a button component
-    const button = figma.createFrame();
-    button.name = "Button";
-    button.resize(120, 40);
-    button.cornerRadius = 8;
-    button.fills = [{ type: 'SOLID', color: { r: 0.23, g: 0.51, b: 0.96 } }];
-
-    // Add auto-layout
-    button.layoutMode = "HORIZONTAL";
-    button.primaryAxisAlignItems = "CENTER";
-    button.counterAxisAlignItems = "CENTER";
-
-    // Add text
-    await figma.loadFontAsync({ family: "Inter", style: "Medium" });
-    const text = figma.createText();
-    text.characters = "Click me";
-    text.fontName = { family: "Inter", style: "Medium" };
-    text.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
-    button.appendChild(text);
-
-    // Position and select
-    button.x = figma.viewport.center.x;
-    button.y = figma.viewport.center.y;
-    figma.currentPage.selection = [button];
-
-    return { nodeId: button.id, name: button.name };
-  `,
-  timeout: 10000  // Optional: max execution time in ms (default: 5000)
-})
-```
-
-**Parameters:**
-- `code` (required): JavaScript code to execute. Has access to `figma` global object.
-- `timeout` (optional): Execution timeout in ms (default: 5000, max: 30000)
-
-**Returns:**
-- Whatever the code returns (use `return` statement)
-- Execution success/failure status
-
-**Best Practices:**
-1. **Always use `await` for async operations** (loadFontAsync, getNodeByIdAsync)
-2. **Return useful data** (node IDs, names) for follow-up operations
-3. **Position elements** relative to viewport center for visibility
-4. **Select created elements** so users can see them immediately
-5. **Use try/catch** for error handling in complex operations
-
-**Common Patterns:**
-
-```javascript
-// Create a page
-const page = figma.createPage();
-page.name = "My New Page";
-await figma.setCurrentPageAsync(page);
-
-// Find and modify existing node
-const node = await figma.getNodeByIdAsync("123:456");
-node.name = "New Name";
-
-// Create component from frame
-const component = figma.createComponent();
-// ... add children
-
-// Apply auto-layout
-frame.layoutMode = "VERTICAL";
-frame.itemSpacing = 8;
-frame.paddingTop = 16;
-frame.paddingBottom = 16;
-frame.paddingLeft = 16;
-frame.paddingRight = 16;
-```
-
----
-
 ## 🔧 Variable Management Tools (Local Mode Only)
 
 > **⚠️ Requires Desktop Bridge Plugin**: These tools only work in Local Mode with the Desktop Bridge plugin running in Figma.
@@ -888,18 +785,21 @@ figma_rename_mode({
 
 ---
 
-### `figma_batch_create_variables`
+### `figma_batch_variables`
 
-Create multiple variables in a single operation — up to 50x faster than calling `figma_create_variable` repeatedly.
+Create, update, or set up complete design token systems in a single operation — up to 50x faster than individual calls.
 
 **When to Use:**
 - Creating multiple design tokens at once (e.g., a full color palette)
-- Importing variables from an external source
-- Any time you need to create more than 2-3 variables
+- Updating many token values at once (e.g., theme refresh)
+- Importing or syncing variables from an external source
+- Any time you need to create or update more than 2-3 variables
+- Setting up a new design system from scratch (collection + modes + variables atomically)
 
-**Usage:**
+**Usage (action: "create"):**
 ```javascript
-figma_batch_create_variables({
+figma_batch_variables({
+  action: "create",
   collectionId: "VariableCollectionId:123:456",
   variables: [
     {
@@ -922,45 +822,10 @@ figma_batch_create_variables({
 })
 ```
 
-**Parameters:**
-- `collectionId` (required): Collection ID to create all variables in
-- `variables` (required): Array of 1-100 variable definitions, each with:
-  - `name` (required): Variable name (use `/` for grouping)
-  - `resolvedType` (required): `"COLOR"`, `"FLOAT"`, `"STRING"`, or `"BOOLEAN"`
-  - `description` (optional): Variable description
-  - `valuesByMode` (optional): Object mapping mode IDs to values
-
-**Returns:**
-```json
-{
-  "success": true,
-  "message": "Batch created 3 variables (0 failed)",
-  "created": 3,
-  "failed": 0,
-  "results": [
-    { "success": true, "name": "colors/primary/500", "id": "VariableID:1:1" },
-    { "success": true, "name": "colors/primary/600", "id": "VariableID:1:2" },
-    { "success": true, "name": "spacing/md", "id": "VariableID:1:3" }
-  ]
-}
-```
-
-**Performance:** Executes in a single CDP roundtrip. 10-50x faster than individual calls for bulk operations.
-
----
-
-### `figma_batch_update_variables`
-
-Update multiple variable values in a single operation — up to 50x faster than calling `figma_update_variable` repeatedly.
-
-**When to Use:**
-- Updating many token values at once (e.g., theme refresh)
-- Syncing variable values from an external source
-- Any time you need to update more than 2-3 variables
-
-**Usage:**
+**Usage (action: "update"):**
 ```javascript
-figma_batch_update_variables({
+figma_batch_variables({
+  action: "update",
   updates: [
     { variableId: "VariableID:1:1", modeId: "1:0", value: "#2563EB" },
     { variableId: "VariableID:1:2", modeId: "1:0", value: "#1D4ED8" },
@@ -969,44 +834,10 @@ figma_batch_update_variables({
 })
 ```
 
-**Parameters:**
-- `updates` (required): Array of 1-100 updates, each with:
-  - `variableId` (required): Variable ID to update
-  - `modeId` (required): Mode ID to update value in
-  - `value` (required): New value (COLOR: hex `"#FF0000"`, FLOAT: number, STRING: text, BOOLEAN: true/false)
-
-**Returns:**
-```json
-{
-  "success": true,
-  "message": "Batch updated 3 variables (0 failed)",
-  "updated": 3,
-  "failed": 0,
-  "results": [
-    { "success": true, "variableId": "VariableID:1:1", "name": "colors/primary/500" },
-    { "success": true, "variableId": "VariableID:1:2", "name": "colors/primary/600" },
-    { "success": true, "variableId": "VariableID:1:3", "name": "spacing/md" }
-  ]
-}
-```
-
-**Performance:** Executes in a single CDP roundtrip. 10-50x faster than individual calls for bulk updates.
-
----
-
-### `figma_setup_design_tokens`
-
-Create a complete design token structure in one atomic operation: collection, modes, and all variables.
-
-**When to Use:**
-- Setting up a new design system from scratch
-- Importing CSS custom properties or design tokens into Figma
-- Creating themed token sets (Light/Dark) with all values at once
-- Bootstrapping a new project with a full token foundation
-
-**Usage:**
+**Usage (action: "setup"):**
 ```javascript
-figma_setup_design_tokens({
+figma_batch_variables({
+  action: "setup",
   collectionName: "Brand Tokens",
   modes: ["Light", "Dark"],
   tokens: [
@@ -1031,15 +862,29 @@ figma_setup_design_tokens({
 ```
 
 **Parameters:**
-- `collectionName` (required): Name for the new collection
-- `modes` (required): Array of 1-4 mode names (first becomes default)
-- `tokens` (required): Array of 1-100 token definitions, each with:
-  - `name` (required): Token name (use `/` for grouping)
-  - `resolvedType` (required): `"COLOR"`, `"FLOAT"`, `"STRING"`, or `"BOOLEAN"`
-  - `description` (optional): Token description
-  - `values` (required): Object mapping **mode names** (not IDs) to values
+- `action` (required): `"create"`, `"update"`, or `"setup"`
+- For `"create"`:
+  - `collectionId` (required): Collection ID to create all variables in
+  - `variables` (required): Array of 1-100 variable definitions, each with:
+    - `name` (required): Variable name (use `/` for grouping)
+    - `resolvedType` (required): `"COLOR"`, `"FLOAT"`, `"STRING"`, or `"BOOLEAN"`
+    - `description` (optional): Variable description
+    - `valuesByMode` (optional): Object mapping mode IDs to values
+- For `"update"`:
+  - `updates` (required): Array of 1-100 updates, each with:
+    - `variableId` (required): Variable ID to update
+    - `modeId` (required): Mode ID to update value in
+    - `value` (required): New value (COLOR: hex `"#FF0000"`, FLOAT: number, STRING: text, BOOLEAN: true/false)
+- For `"setup"`:
+  - `collectionName` (required): Name for the new collection
+  - `modes` (required): Array of 1-4 mode names (first becomes default)
+  - `tokens` (required): Array of 1-100 token definitions, each with:
+    - `name` (required): Token name (use `/` for grouping)
+    - `resolvedType` (required): `"COLOR"`, `"FLOAT"`, `"STRING"`, or `"BOOLEAN"`
+    - `description` (optional): Token description
+    - `values` (required): Object mapping **mode names** (not IDs) to values
 
-**Returns:**
+**Returns (setup):**
 ```json
 {
   "success": true,
@@ -1057,9 +902,45 @@ figma_setup_design_tokens({
 }
 ```
 
-**Key Difference from Other Tools:** Values are keyed by **mode name** (e.g., `"Light"`, `"Dark"`) instead of mode ID — the tool resolves names to IDs internally.
+**Key Note for "setup":** Values are keyed by **mode name** (e.g., `"Light"`, `"Dark"`) instead of mode ID — the tool resolves names to IDs internally.
 
-**Performance:** Creates everything in a single CDP roundtrip. Ideal for bootstrapping entire token systems.
+**Returns (create):**
+```json
+{
+  "success": true,
+  "message": "Batch created 3 variables (0 failed)",
+  "created": 3,
+  "failed": 0,
+  "results": [
+    { "success": true, "name": "colors/primary/500", "id": "VariableID:1:1" },
+    { "success": true, "name": "colors/primary/600", "id": "VariableID:1:2" },
+    { "success": true, "name": "spacing/md", "id": "VariableID:1:3" }
+  ]
+}
+```
+
+**Returns (update):**
+```json
+{
+  "success": true,
+  "message": "Batch updated 3 variables (0 failed)",
+  "updated": 3,
+  "failed": 0,
+  "results": [
+    { "success": true, "variableId": "VariableID:1:1", "name": "colors/primary/500" },
+    { "success": true, "variableId": "VariableID:1:2", "name": "colors/primary/600" },
+    { "success": true, "variableId": "VariableID:1:3", "name": "spacing/md" }
+  ]
+}
+```
+
+**Performance:** Executes in a single CDP roundtrip. 10-50x faster than individual calls for bulk operations.
+
+---
+
+### `figma_setup_design_tokens` (Removed)
+
+> **Consolidated into `figma_batch_variables(action: "setup")`**. See [figma_batch_variables](#figma_batch_variables) above.
 
 ---
 
@@ -1067,48 +948,60 @@ figma_setup_design_tokens({
 
 > **⚠️ Requires Desktop Bridge Plugin**: These tools only work in Local Mode with the Desktop Bridge plugin running in Figma.
 
-### `figma_search_components`
+### `figma_find_components`
 
-Search for components in the current file by name or description.
+Unified component search tool — find components by name, get detailed component information, retrieve component keys for instantiation, or get a high-level design system overview.
 
 **When to Use:**
 - Finding existing components to instantiate
 - Discovering available UI building blocks
 - Checking if a component already exists before creating
+- Getting detailed component properties, variants, and metadata
+- Retrieving component keys for instantiation
+- Getting a high-level overview of the design system (replaces the former `figma_get_design_system_summary`)
 
-**Usage:**
+**Usage (search):**
 ```javascript
-figma_search_components({
+figma_find_components({
   query: "Button",           // Search term
   includeDescription: true   // Include description in results
 })
 ```
 
-**Parameters:**
-- `query` (required): Search term to match against component names
-- `includeDescription` (optional): Include component descriptions (default: true)
-
-**Returns:**
-- Array of matching components with ID, name, key, and description
-
----
-
-### `figma_get_component_details`
-
-Get detailed information about a specific component.
-
-**Usage:**
+**Usage (details):**
 ```javascript
-figma_get_component_details({
-  componentKey: "abc123def456"  // Component key from search results
+figma_find_components({
+  componentKey: "abc123def456",  // Component key from search results
+  verbosity: "details"
+})
+```
+
+**Usage (keys):**
+```javascript
+figma_find_components({
+  query: "Button",
+  verbosity: "keys"
+})
+```
+
+**Usage (overview):**
+```javascript
+figma_find_components({
+  verbosity: "overview"
 })
 ```
 
 **Parameters:**
-- `componentKey` (required): The component's key identifier
+- `query` (optional): Search term to match against component names
+- `componentKey` (optional): The component's key identifier (for details lookup)
+- `verbosity` (optional): Level of detail — `"summary"` (default search), `"details"` (full component info), `"keys"` (component keys for instantiation), or `"overview"` (high-level design system summary)
+- `includeDescription` (optional): Include component descriptions (default: true)
 
 **Returns:**
-- Full component details including properties, variants, and metadata
+- At `"summary"` verbosity: Array of matching components with ID, name, key, and description
+- At `"details"` verbosity: Full component details including properties, variants, and metadata
+- At `"keys"` verbosity: Component keys suitable for use with `figma_instantiate_component`
+- At `"overview"` verbosity: High-level design system summary including component count and categories, variable collections and counts, style summary, and page structure overview
 
 ---
 
@@ -1198,108 +1091,69 @@ figma_arrange_component_set({
 
 ---
 
-### `figma_set_description`
+### `figma_set_description` (Removed)
 
-Add or update a description on a component, component set, or style.
-
-**When to Use:**
-- Documenting components for developers
-- Adding usage guidelines
-- Writing design system documentation
-
-**Usage:**
-```javascript
-figma_set_description({
-  nodeId: "123:456",
-  description: "Primary action button. Use for main CTAs.\n\n**Variants:**\n- Size: Small, Medium, Large\n- State: Default, Hover, Pressed, Disabled"
-})
-```
-
-**Parameters:**
-- `nodeId` (required): Node ID of component/style to document
-- `description` (required): Description text (supports markdown)
-
-**Returns:**
-- Confirmation with updated node info
-
-**Note:** Descriptions appear in Figma's Dev Mode for developers.
+> **Consolidated into `figma_component_property(action: "set_description")`**. See [Component Property Tools](#-component-property-tools-local-mode-only) below.
 
 ---
 
 ## 🔧 Node Manipulation Tools (Local Mode Only)
 
-### `figma_resize_node`
+### `figma_edit_node`
 
-Resize a node to specific dimensions.
+Unified node manipulation tool — resize, move, clone, delete, rename, reparent, or reorder nodes using an action-based interface.
 
 **Usage:**
 ```javascript
-figma_resize_node({
+// Resize a node
+figma_edit_node({
+  action: "resize",
   nodeId: "123:456",
   width: 200,
   height: 100
 })
-```
 
----
-
-### `figma_move_node`
-
-Move a node to a specific position.
-
-**Usage:**
-```javascript
-figma_move_node({
+// Move a node
+figma_edit_node({
+  action: "move",
   nodeId: "123:456",
   x: 100,
   y: 200
 })
-```
 
----
-
-### `figma_clone_node`
-
-Create a copy of a node.
-
-**Usage:**
-```javascript
-figma_clone_node({
+// Clone a node
+figma_edit_node({
+  action: "clone",
   nodeId: "123:456"
 })
-```
 
-**Returns:**
-- New node ID of the clone
-
----
-
-### `figma_delete_node`
-
-Delete a node from the canvas.
-
-**Usage:**
-```javascript
-figma_delete_node({
+// Delete a node
+figma_edit_node({
+  action: "delete",
   nodeId: "123:456"
 })
-```
 
-**⚠️ Warning:** This cannot be undone programmatically.
-
----
-
-### `figma_rename_node`
-
-Rename a node.
-
-**Usage:**
-```javascript
-figma_rename_node({
+// Rename a node
+figma_edit_node({
+  action: "rename",
   nodeId: "123:456",
   newName: "Header Section"
 })
 ```
+
+**Parameters:**
+- `action` (required): `"resize"`, `"move"`, `"clone"`, `"delete"`, `"rename"`, `"reparent"`, or `"reorder"`
+- `nodeId` (required): Node ID to operate on
+- For `"resize"`: `width`, `height`
+- For `"move"`: `x`, `y`
+- For `"rename"`: `newName`
+- For `"reparent"`: `parentId`, `index` (optional)
+- For `"reorder"`: `index`
+
+**Returns:**
+- Action-specific result (e.g., new node ID for clone, confirmation for delete)
+
+**Warning:** The `"delete"` action cannot be undone programmatically.
 
 ---
 
@@ -1317,32 +1171,46 @@ figma_set_text({
 
 ---
 
-### `figma_set_fills`
+### `figma_set_appearance`
 
-Set the fill colors of a node.
+Set visual appearance properties of a node — fills, strokes, opacity, cornerRadius, effects, rotation, and blendMode.
 
 **Usage:**
 ```javascript
-figma_set_fills({
+// Set fill colors
+figma_set_appearance({
   nodeId: "123:456",
   fills: [{ type: "SOLID", color: "#FF0000" }]
 })
-```
 
----
-
-### `figma_set_strokes`
-
-Set the stroke colors of a node.
-
-**Usage:**
-```javascript
-figma_set_strokes({
+// Set stroke colors
+figma_set_appearance({
   nodeId: "123:456",
   strokes: [{ type: "SOLID", color: "#000000" }],
   strokeWeight: 2
 })
+
+// Set multiple appearance properties at once
+figma_set_appearance({
+  nodeId: "123:456",
+  fills: [{ type: "SOLID", color: "#3B82F6" }],
+  opacity: 0.9,
+  cornerRadius: 8,
+  rotation: 15,
+  blendMode: "MULTIPLY"
+})
 ```
+
+**Parameters:**
+- `nodeId` (required): Node ID to modify
+- `fills` (optional): Array of fill paint objects
+- `strokes` (optional): Array of stroke paint objects
+- `strokeWeight` (optional): Stroke weight in pixels
+- `opacity` (optional): Node opacity (0-1)
+- `cornerRadius` (optional): Corner radius in pixels
+- `effects` (optional): Array of effect objects (shadows, blurs)
+- `rotation` (optional): Rotation in degrees
+- `blendMode` (optional): Blend mode (NORMAL, MULTIPLY, SCREEN, OVERLAY, etc.)
 
 ---
 
@@ -1417,40 +1285,45 @@ figma_delete_component_property({
 
 ---
 
-## 📊 Design System Summary Tools (Local Mode Only)
+### `figma_component_property`
 
-### `figma_get_design_system_summary`
+Unified component property tool — currently supports setting descriptions on components, component sets, or styles.
 
-Get a high-level overview of the design system in the current file.
+**When to Use:**
+- Documenting components for developers
+- Adding usage guidelines
+- Writing design system documentation
 
-**Usage:**
+**Usage (set_description):**
 ```javascript
-figma_get_design_system_summary()
-```
-
-**Returns:**
-- Component count and categories
-- Variable collections and counts
-- Style summary (colors, text, effects)
-- Page structure overview
-
----
-
-### `figma_get_token_values`
-
-Get all variable values organized by collection and mode.
-
-**Usage:**
-```javascript
-figma_get_token_values({
-  collectionName: "Brand Colors"  // Optional: filter by collection
+figma_component_property({
+  action: "set_description",
+  nodeId: "123:456",
+  description: "Primary action button. Use for main CTAs.\n\n**Variants:**\n- Size: Small, Medium, Large\n- State: Default, Hover, Pressed, Disabled"
 })
 ```
 
+**Parameters:**
+- `action` (required): `"set_description"`
+- `nodeId` (required): Node ID of component/style to document
+- `description` (required): Description text (supports markdown)
+
 **Returns:**
-- Variables organized by collection
-- Values for each mode
-- Variable metadata
+- Confirmation with updated node info
+
+**Note:** Descriptions appear in Figma's Dev Mode for developers.
+
+---
+
+## 📊 Design System Summary Tools (Consolidated)
+
+### `figma_get_design_system_summary` (Removed)
+
+> **Consolidated into `figma_find_components(verbosity: "overview")`**. See [figma_find_components](#figma_find_components) above.
+
+### `figma_get_token_values` (Removed)
+
+> **Removed.** Use `figma_get_variables(format="summary")` for variable values by collection and mode, or `figma_find_components(verbosity: "overview")` for a high-level design system overview.
 
 ---
 
@@ -1460,12 +1333,12 @@ figma_get_token_values({
 
 | Task | Tool | Example |
 |------|------|---------|
-| Create UI components | `figma_execute` | Buttons, cards, modals |
-| Create frames/layouts | `figma_execute` | Auto-layout containers |
-| Add text | `figma_execute` | Labels, headings, paragraphs |
-| Create shapes | `figma_execute` | Icons, decorations |
-| Modify existing elements | `figma_execute` | Change colors, resize |
-| Create pages | `figma_execute` | Organize file structure |
+| Resize, move, clone, delete nodes | `figma_edit_node` | Layout adjustments, duplication |
+| Set fills, strokes, effects, opacity | `figma_set_appearance` | Visual styling |
+| Create child nodes | `figma_create_child` | Building frames |
+| Set text content | `figma_set_text` | Labels, headings, paragraphs |
+| Arrange component variants | `figma_arrange_component_set` | Organize variant grids |
+| Manage pages | `figma_manage_page` | Create, rename, reorder pages |
 
 ### For Variable Management
 
@@ -1473,10 +1346,10 @@ figma_get_token_values({
 |------|------|
 | Create new token collection | `figma_create_variable_collection` |
 | Add a single design token | `figma_create_variable` |
-| Add multiple design tokens (3+) | `figma_batch_create_variables` |
+| Add multiple design tokens (3+) | `figma_batch_variables` (action: "create") |
 | Change a single token value | `figma_update_variable` |
-| Change multiple token values (3+) | `figma_batch_update_variables` |
-| Set up a full token system from scratch | `figma_setup_design_tokens` |
+| Change multiple token values (3+) | `figma_batch_variables` (action: "update") |
+| Set up a full token system from scratch | `figma_batch_variables` (action: "setup") |
 | Reorganize token names | `figma_rename_variable` |
 | Remove tokens | `figma_delete_variable` |
 | Add themes (Light/Dark) | `figma_add_mode` |
@@ -1490,9 +1363,9 @@ figma_get_token_values({
 | Generate component documentation | `figma_generate_component_doc` |
 | Audit component before sign-off | `figma_check_design_parity` |
 | Create design system reference docs | `figma_generate_component_doc` |
-| Notify designers of parity drift | `figma_post_comment` |
-| Review existing feedback threads | `figma_get_comments` |
-| Clean up resolved feedback | `figma_delete_comment` |
+| Notify designers of parity drift | `figma_comments` (action: "post") |
+| Review existing feedback threads | `figma_comments` (action: "get") |
+| Clean up resolved feedback | `figma_comments` (action: "delete") |
 
 ### Prerequisites Checklist
 
@@ -1645,102 +1518,84 @@ Same as parity checker — resolves to default variant for visual specs, reads p
 
 ## 💬 Comment Tools
 
-### `figma_get_comments`
+### `figma_comments`
 
-Get comments on a Figma file. Returns comment threads with author, message, timestamps, and pinned node locations.
+Unified comment tool — get, post, or delete comments on a Figma file.
 
 **When to Use:**
 - Reviewing feedback threads on a design file
 - Checking for open comments before a release
-- Retrieving comment IDs to reply to or delete
+- Posting feedback pinned to specific components (e.g., after `figma_check_design_parity`)
+- Replying to existing comment threads
+- Cleaning up resolved or outdated comments
 
-**Usage:**
+**Usage (action: "get"):**
 ```javascript
-figma_get_comments({
+figma_comments({
+  action: "get",
   fileUrl: 'https://figma.com/design/abc123',
   include_resolved: false,
   as_md: true
 })
 ```
 
-**Parameters:**
-- `fileUrl` (optional): Figma file URL (uses current URL if omitted)
-- `as_md` (optional): Return comment message bodies as markdown (default: false)
-- `include_resolved` (optional): Include resolved comment threads (default: false)
-
-**Returns:**
-- `comments`: Array of comment objects with `id`, `message`, `user`, `created_at`, `resolved_at`, `client_meta` (pinned location)
-- `summary`: Total, active, resolved, and returned counts
-
----
-
-### `figma_post_comment`
-
-Post a comment on a Figma file, optionally pinned to a specific design node. Supports replies to existing threads.
-
-**When to Use:**
-- After `figma_check_design_parity` to notify designers of drift
-- Leaving feedback on specific components or elements
-- Replying to an existing comment thread
-
-**Usage:**
+**Usage (action: "post"):**
 ```javascript
 // Pin a comment to a specific node
-figma_post_comment({
+figma_comments({
+  action: "post",
   fileUrl: 'https://figma.com/design/abc123',
   message: 'Border-radius in code uses 8px but Figma shows 6px. Please update.',
   node_id: '695:313'
 })
 
 // Reply to an existing comment thread
-figma_post_comment({
+figma_comments({
+  action: "post",
   fileUrl: 'https://figma.com/design/abc123',
   message: 'Fixed in the latest push.',
   reply_to_comment_id: '1627922741'
 })
 ```
 
-**Parameters:**
-- `fileUrl` (optional): Figma file URL (uses current URL if omitted)
-- `message` (required): The comment message text
-- `node_id` (optional): Node ID to pin the comment to (e.g., `'695:313'`)
-- `x` (optional): X offset for comment placement relative to the node
-- `y` (optional): Y offset for comment placement relative to the node
-- `reply_to_comment_id` (optional): ID of an existing comment to reply to
-
-**Returns:**
-- `comment`: Created comment object with `id`, `message`, `created_at`, `user`, `client_meta`
-
-<Warning>
-**@mentions are not supported via the API.** Including `@name` in the message renders as plain text, not a clickable Figma mention tag. Clickable @mentions with notifications are a Figma UI-only feature. To notify specific people, share the comment link or use Figma's built-in notification system.
-</Warning>
-
----
-
-### `figma_delete_comment`
-
-Delete a comment from a Figma file by its comment ID.
-
-**When to Use:**
-- Cleaning up test or outdated comments
-- Removing resolved feedback after fixes are confirmed
-- Managing comment threads programmatically
-
-**Usage:**
+**Usage (action: "delete"):**
 ```javascript
-figma_delete_comment({
+figma_comments({
+  action: "delete",
   fileUrl: 'https://figma.com/design/abc123',
   comment_id: '1627922741'
 })
 ```
 
 **Parameters:**
+- `action` (required): `"get"`, `"post"`, or `"delete"`
 - `fileUrl` (optional): Figma file URL (uses current URL if omitted)
-- `comment_id` (required): The ID of the comment to delete (get IDs from `figma_get_comments`)
+- For `"get"`:
+  - `as_md` (optional): Return comment message bodies as markdown (default: false)
+  - `include_resolved` (optional): Include resolved comment threads (default: false)
+- For `"post"`:
+  - `message` (required): The comment message text
+  - `node_id` (optional): Node ID to pin the comment to (e.g., `'695:313'`)
+  - `x` (optional): X offset for comment placement relative to the node
+  - `y` (optional): Y offset for comment placement relative to the node
+  - `reply_to_comment_id` (optional): ID of an existing comment to reply to
+- For `"delete"`:
+  - `comment_id` (required): The ID of the comment to delete (get IDs from `figma_comments` with action `"get"`)
 
-**Returns:**
+**Returns (get):**
+- `comments`: Array of comment objects with `id`, `message`, `user`, `created_at`, `resolved_at`, `client_meta` (pinned location)
+- `summary`: Total, active, resolved, and returned counts
+
+**Returns (post):**
+- `comment`: Created comment object with `id`, `message`, `created_at`, `user`, `client_meta`
+
+**Returns (delete):**
 - `success`: Boolean indicating deletion success
 - `deleted_comment_id`: The ID that was deleted
+
+<Warning>
+**@mentions are not supported via the API.** Including `@name` in the message renders as plain text, not a clickable Figma mention tag. Clickable @mentions with notifications are a Figma UI-only feature. To notify specific people, share the comment link or use Figma's built-in notification system.
+</Warning>
 
 ---
 

@@ -788,26 +788,28 @@ function generateActionItems(
 			switch (d.category) {
 				case "visual":
 					if (d.property === "backgroundColor" && d.codeValue) {
-						item.figmaTool = "figma_set_fills";
+						item.figmaTool = "figma_set_appearance";
 						item.figmaToolParams = {
 							nodeId,
 							fills: [{ type: "SOLID", color: String(d.codeValue) }],
 						};
 					} else if (d.property === "borderColor" && d.codeValue) {
-						item.figmaTool = "figma_set_strokes";
+						item.figmaTool = "figma_set_appearance";
 						item.figmaToolParams = {
 							nodeId,
 							strokes: [{ type: "SOLID", color: String(d.codeValue) }],
 						};
 					} else if (d.property === "borderRadius" && d.codeValue) {
-						item.figmaTool = "figma_execute";
+						item.figmaTool = "figma_set_appearance";
 						item.figmaToolParams = {
-							code: `const node = figma.getNodeById("${nodeId}"); if (node && "cornerRadius" in node) { node.cornerRadius = ${d.codeValue}; }`,
+							nodeId,
+							cornerRadius: Number(d.codeValue),
 						};
 					} else if (d.property === "borderWidth" && d.codeValue) {
-						item.figmaTool = "figma_execute";
+						item.figmaTool = "figma_set_appearance";
 						item.figmaToolParams = {
-							code: `const node = figma.getNodeById("${nodeId}"); if (node && "strokeWeight" in node) { node.strokeWeight = ${d.codeValue}; }`,
+							nodeId,
+							strokeWeight: Number(d.codeValue),
 						};
 					}
 					break;
@@ -817,14 +819,16 @@ function generateActionItems(
 						const prop = d.property;
 						if (["paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "gap"].includes(prop)) {
 							const figmaProp = prop === "gap" ? "itemSpacing" : prop;
-							item.figmaTool = "figma_execute";
-							item.figmaToolParams = {
-								code: `const node = figma.getNodeById("${nodeId}"); if (node && "${figmaProp}" in node) { node.${figmaProp} = ${d.codeValue}; }`,
-							};
-						} else if (prop === "width" || prop === "height") {
-							item.figmaTool = "figma_resize_node";
+							item.figmaTool = "figma_set_layout";
 							item.figmaToolParams = {
 								nodeId,
+								[figmaProp]: Number(d.codeValue),
+							};
+						} else if (prop === "width" || prop === "height") {
+							item.figmaTool = "figma_edit_node";
+							item.figmaToolParams = {
+								nodeId,
+								action: "resize",
 								[prop]: Number(d.codeValue),
 							};
 						}
@@ -833,7 +837,7 @@ function generateActionItems(
 
 				case "componentAPI":
 					if (d.property.startsWith("prop:") && d.codeValue && !d.designValue) {
-						item.figmaTool = "figma_add_component_property";
+						item.figmaTool = "figma_component_property";
 						item.figmaToolParams = {
 							nodeId,
 							propertyName: String(d.codeValue),
@@ -845,8 +849,9 @@ function generateActionItems(
 
 				case "metadata":
 					if (d.property === "description" && d.codeValue) {
-						item.figmaTool = "figma_set_description";
+						item.figmaTool = "figma_component_property";
 						item.figmaToolParams = {
+							action: "set_description",
 							nodeId,
 							description: String(d.codeValue),
 						};
@@ -1486,7 +1491,7 @@ export function registerDesignCodeTools(
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
 					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.]",
+						"No Figma file URL available. Pass the fileUrl parameter, call figma_connection action='navigate' (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_connection action='navigate' with the Figma file URL first, then retry.]",
 					);
 				}
 
@@ -1503,7 +1508,7 @@ export function registerDesignCodeTools(
 				const nodesResponse = await api.getNodes(fileKey, [nodeId], { depth: 2 });
 				const nodeData = nodesResponse?.nodes?.[nodeId];
 				if (!nodeData?.document) {
-					throw new Error(`Node ${nodeId} not found in file ${fileKey}. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_search_components.]`);
+					throw new Error(`Node ${nodeId} not found in file ${fileKey}. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_find_components.]`);
 				}
 				const node = nodeData.document;
 
@@ -1730,7 +1735,7 @@ export function registerDesignCodeTools(
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
 					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_navigate with the Figma file URL first, then retry.]",
+						"No Figma file URL available. Pass the fileUrl parameter, call figma_connection action='navigate' (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode). [AI: No file URL could be resolved. Either pass the fileUrl parameter directly, or call figma_connection action='navigate' with the Figma file URL first, then retry.]",
 					);
 				}
 
@@ -1747,7 +1752,7 @@ export function registerDesignCodeTools(
 				const nodesResponse = await api.getNodes(fileKey, [nodeId], { depth: 2 });
 				const nodeData = nodesResponse?.nodes?.[nodeId];
 				if (!nodeData?.document) {
-					throw new Error(`Node ${nodeId} not found in file ${fileKey}. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_search_components.]`);
+					throw new Error(`Node ${nodeId} not found in file ${fileKey}. [AI: NodeIds are session-specific — do not reuse IDs from previous conversations. Re-fetch node IDs using figma_get_file_data or figma_find_components.]`);
 				}
 				const node = nodeData.document;
 

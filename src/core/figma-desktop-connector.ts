@@ -452,7 +452,7 @@ export class FigmaDesktopConnector implements IFigmaConnector {
           }
 
           // Get the node by ID
-          const node = figma.getNodeById('${nodeId}');
+          const node = await figma.getNodeByIdAsync('${nodeId}');
           
           if (!node) {
             throw new Error('Node not found with ID: ${nodeId}');
@@ -1409,10 +1409,63 @@ export class FigmaDesktopConnector implements IFigmaConnector {
   }
 
   /**
+   * Reparent a node (move to a new parent)
+   */
+  async reparentNode(nodeId: string, newParentId: string, insertIndex?: number): Promise<any> {
+    logger.info({ nodeId, newParentId, insertIndex }, 'Reparenting node via plugin UI');
+
+    const frame = await this.findPluginUIFrame();
+
+    try {
+      const result = await frame.evaluate(
+        `window.reparentNode(${JSON.stringify(nodeId)}, ${JSON.stringify(newParentId)}${insertIndex !== undefined ? `, ${insertIndex}` : ''})`
+      );
+
+      logger.info({ success: result.success, nodeId: result.node?.id }, 'Node reparented');
+      return result;
+    } catch (error) {
+      logger.error({ error, nodeId }, 'Reparent node failed');
+      throw error;
+    }
+  }
+
+  /**
+   * Reorder a node (change z-order within parent)
+   */
+  async reorderNode(nodeId: string, index: number): Promise<any> {
+    logger.info({ nodeId, index }, 'Reordering node via plugin UI');
+
+    const frame = await this.findPluginUIFrame();
+
+    try {
+      const result = await frame.evaluate(
+        `window.reorderNode(${JSON.stringify(nodeId)}, ${index})`
+      );
+
+      logger.info({ success: result.success, nodeId: result.node?.id }, 'Node reordered');
+      return result;
+    } catch (error) {
+      logger.error({ error, nodeId }, 'Reorder node failed');
+      throw error;
+    }
+  }
+
+  /**
    * Set text content on a text node
    */
-  async setTextContent(nodeId: string, text: string, options?: { fontSize?: number }): Promise<any> {
-    logger.info({ nodeId, textLength: text.length }, 'Setting text content via plugin UI');
+  async setTextContent(nodeId: string, text: string | undefined, options?: {
+    fontSize?: number;
+    fontFamily?: string;
+    fontStyle?: string;
+    textAlignHorizontal?: string;
+    textAlignVertical?: string;
+    lineHeight?: { value?: number; unit: string };
+    letterSpacing?: { value: number; unit?: string };
+    textAutoResize?: string;
+    textDecoration?: string;
+    textCase?: string;
+  }): Promise<any> {
+    logger.info({ nodeId, textLength: text?.length ?? 0 }, 'Setting text content via plugin UI');
 
     const frame = await this.findPluginUIFrame();
 

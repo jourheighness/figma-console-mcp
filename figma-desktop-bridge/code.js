@@ -1106,7 +1106,7 @@ figma.ui.onmessage = async (msg) => {
           errorParts.push('No componentKey or nodeId was provided.');
         }
 
-        errorParts.push('SOLUTION: Call figma_search_components to get fresh identifiers, then pass BOTH componentKey AND nodeId together for reliable instantiation.');
+        errorParts.push('SOLUTION: Call figma_find_components to get fresh identifiers, then pass BOTH componentKey AND nodeId together for reliable instantiation.');
 
         throw new Error(errorParts.join(' '));
       }
@@ -1465,6 +1465,24 @@ figma.ui.onmessage = async (msg) => {
             opacity: rgb.a !== undefined ? rgb.a : (fill.opacity !== undefined ? fill.opacity : 1)
           };
         }
+        // Convert gradient fills - hex colors in stops and default transform
+        if (fill.type && fill.type.indexOf('GRADIENT') === 0 && fill.gradientStops) {
+          var stops = fill.gradientStops.map(function(stop) {
+            if (typeof stop.color === 'string') {
+              var rgba = hexToFigmaRGB(stop.color);
+              return { position: stop.position, color: { r: rgba.r, g: rgba.g, b: rgba.b, a: rgba.a !== undefined ? rgba.a : 1 } };
+            }
+            return stop;
+          });
+          var transform = fill.gradientTransform || [[1, 0, 0], [0, 1, 0]];
+          return {
+            type: fill.type,
+            gradientStops: stops,
+            gradientTransform: transform,
+            opacity: fill.opacity !== undefined ? fill.opacity : 1,
+            visible: fill.visible !== undefined ? fill.visible : true
+          };
+        }
         return fill;
       });
 
@@ -1738,7 +1756,84 @@ figma.ui.onmessage = async (msg) => {
   }
 
   // ============================================================================
-  // SET_TEXT_CONTENT - Set text on a text node
+  // REPARENT_NODE - Move a node to a new parent container
+  // ============================================================================
+  else if (msg.type === 'REPARENT_NODE') {
+    try {
+      console.log('🌉 [Desktop Bridge] Reparenting node:', msg.nodeId, 'to parent:', msg.newParentId);
+
+      var node = await figma.getNodeByIdAsync(msg.nodeId);
+      if (!node) throw new Error('Node not found: ' + msg.nodeId);
+
+      var newParent = await figma.getNodeByIdAsync(msg.newParentId);
+      if (!newParent) throw new Error('New parent not found: ' + msg.newParentId);
+
+      if (!('appendChild' in newParent)) {
+        throw new Error('New parent does not support children: ' + newParent.type);
+      }
+
+      var insertIndex = msg.insertIndex;
+      if (insertIndex !== undefined && insertIndex !== null) {
+        newParent.insertChild(insertIndex, node);
+      } else {
+        newParent.appendChild(node);
+      }
+
+      figma.ui.postMessage({
+        type: 'REPARENT_NODE_RESULT',
+        requestId: msg.requestId,
+        success: true,
+        node: { id: node.id, name: node.name, newParentId: newParent.id, newParentName: newParent.name }
+      });
+    } catch (error) {
+      var errorMsg = error && error.message ? error.message : String(error);
+      console.error('🌉 [Desktop Bridge] Reparent node error:', errorMsg);
+      figma.ui.postMessage({
+        type: 'REPARENT_NODE_RESULT',
+        requestId: msg.requestId,
+        success: false,
+        error: errorMsg
+      });
+    }
+  }
+
+  // ============================================================================
+  // REORDER_NODE - Change z-order of a node within its parent
+  // ============================================================================
+  else if (msg.type === 'REORDER_NODE') {
+    try {
+      console.log('🌉 [Desktop Bridge] Reordering node:', msg.nodeId, 'to index:', msg.index);
+
+      var node = await figma.getNodeByIdAsync(msg.nodeId);
+      if (!node) throw new Error('Node not found: ' + msg.nodeId);
+
+      var parent = node.parent;
+      if (!parent || !('insertChild' in parent)) {
+        throw new Error('Node has no parent or parent does not support reordering');
+      }
+
+      parent.insertChild(msg.index, node);
+
+      figma.ui.postMessage({
+        type: 'REORDER_NODE_RESULT',
+        requestId: msg.requestId,
+        success: true,
+        node: { id: node.id, name: node.name, newIndex: msg.index }
+      });
+    } catch (error) {
+      var errorMsg = error && error.message ? error.message : String(error);
+      console.error('🌉 [Desktop Bridge] Reorder node error:', errorMsg);
+      figma.ui.postMessage({
+        type: 'REORDER_NODE_RESULT',
+        requestId: msg.requestId,
+        success: false,
+        error: errorMsg
+      });
+    }
+  }
+
+  // ============================================================================
+  // SET_TEXT_CONTENT - Set text on a text node with full typography support
   // ============================================================================
   else if (msg.type === 'SET_TEXT_CONTENT') {
     try {
@@ -1753,14 +1848,69 @@ figma.ui.onmessage = async (msg) => {
         throw new Error('Node must be a TEXT node. Got: ' + node.type);
       }
 
-      // Load the font first
-      await figma.loadFontAsync(node.fontName);
+      // Determine target font — load it before any text mutations
+      var targetFamily = msg.fontFamily || (node.fontName !== figma.mixed ? node.fontName.family : 'Inter');
+      var targetStyle = msg.fontStyle || (node.fontName !== figma.mixed ? node.fontName.style : 'Regular');
+      await figma.loadFontAsync({ family: targetFamily, style: targetStyle });
 
-      node.characters = msg.text;
+      // Also load the current font if different (needed to set characters)
+      if (node.fontName !== figma.mixed) {
+        var currentFont = node.fontName;
+        if (currentFont.family !== targetFamily || currentFont.style !== targetStyle) {
+          await figma.loadFontAsync(currentFont);
+        }
+      }
 
-      // Apply font properties if specified
+      // Set text content if provided
+      if (msg.text !== undefined && msg.text !== null) {
+        node.characters = msg.text;
+      }
+
+      // Apply font family/style
+      if (msg.fontFamily || msg.fontStyle) {
+        node.fontName = { family: targetFamily, style: targetStyle };
+      }
+
+      // Apply font size
       if (msg.fontSize) {
         node.fontSize = msg.fontSize;
+      }
+
+      // Apply text alignment
+      if (msg.textAlignHorizontal) {
+        node.textAlignHorizontal = msg.textAlignHorizontal;
+      }
+      if (msg.textAlignVertical) {
+        node.textAlignVertical = msg.textAlignVertical;
+      }
+
+      // Apply line height
+      if (msg.lineHeight) {
+        if (msg.lineHeight.unit === 'AUTO') {
+          node.lineHeight = { unit: 'AUTO' };
+        } else {
+          node.lineHeight = { value: msg.lineHeight.value, unit: msg.lineHeight.unit || 'PIXELS' };
+        }
+      }
+
+      // Apply letter spacing
+      if (msg.letterSpacing) {
+        node.letterSpacing = { value: msg.letterSpacing.value, unit: msg.letterSpacing.unit || 'PIXELS' };
+      }
+
+      // Apply text auto resize
+      if (msg.textAutoResize) {
+        node.textAutoResize = msg.textAutoResize;
+      }
+
+      // Apply text decoration
+      if (msg.textDecoration) {
+        node.textDecoration = msg.textDecoration;
+      }
+
+      // Apply text case
+      if (msg.textCase) {
+        node.textCase = msg.textCase;
       }
 
       console.log('🌉 [Desktop Bridge] Text content set');
@@ -1769,7 +1919,15 @@ figma.ui.onmessage = async (msg) => {
         type: 'SET_TEXT_CONTENT_RESULT',
         requestId: msg.requestId,
         success: true,
-        node: { id: node.id, name: node.name, characters: node.characters }
+        node: {
+          id: node.id,
+          name: node.name,
+          characters: node.characters,
+          fontName: node.fontName,
+          fontSize: node.fontSize,
+          textAlignHorizontal: node.textAlignHorizontal,
+          textAlignVertical: node.textAlignVertical
+        }
       });
 
     } catch (error) {

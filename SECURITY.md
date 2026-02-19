@@ -46,9 +46,9 @@ Figma Console MCP uses **Figma's native authentication** mechanisms:
 - Tokens managed via Figma's authorization servers
 - No custom credential handling
 
-## Code Execution (`figma_execute`)
+## Code Execution (Design Manipulation Tools)
 
-The `figma_execute` tool allows running JavaScript in Figma's plugin context. Security considerations:
+The design manipulation tools (`figma_edit_node`, `figma_set_appearance`, `figma_create_child`, etc.) modify designs in Figma's plugin context. Security considerations:
 
 ### Sandboxed Environment
 - Code runs in Figma's **plugin sandbox**, not your system
@@ -77,7 +77,7 @@ Figma Console MCP can access:
 | Styles | Read | Color, text, and effect styles |
 | File Structure | Read | Pages, frames, layers |
 | Console Logs | Read | From plugins you're debugging |
-| Design Modifications | Write | Only via `figma_execute` with Desktop Bridge |
+| Design Modifications | Write | Only via design manipulation tools with Desktop Bridge |
 
 **Cannot access:**
 - Your filesystem

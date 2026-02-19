@@ -29,8 +29,7 @@ Two deployment modes:
 
 ### Local Mode (Desktop Bridge)
 - Connects to Figma Desktop via plugin
-- Full read/write capabilities
-- Execute arbitrary Figma Plugin API code via `figma_execute`
+- Full read/write capabilities via specialized tools
 
 ### Cloudflare Mode
 - REST API for read-only operations
@@ -51,10 +50,11 @@ Two deployment modes:
 - `figma_get_styles` - Color, text, effect styles
 
 ### Design Manipulation (Desktop Bridge)
-- `figma_execute` - Run arbitrary Plugin API code
+- `figma_edit_node` - Resize, move, clone, delete, rename, reparent, reorder nodes
+- `figma_set_appearance` - Fills, strokes, opacity, corner radius, effects, rotation
 - `figma_create_child` - Add nodes to frames
-- `figma_set_fills` / `figma_set_strokes` - Modify appearance
-- `figma_resize_node` / `figma_move_node` - Transform nodes
+- `figma_set_text` - Text content and typography
+- `figma_set_reaction` - Prototyping interactions
 - Component property management tools
 
 ## Development Workflow
