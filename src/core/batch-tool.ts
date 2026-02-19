@@ -7,11 +7,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createChildLogger } from "./logger.js";
+import { sendProgress } from "./progress.js";
 
 const logger = createChildLogger({ component: "batch-tool" });
 
 const OPERATION_TIMEOUT_MS = 30_000;
-const MAX_OPERATIONS = 10;
+const MAX_OPERATIONS = 25;
 
 interface OperationResult {
 	id: string;
@@ -44,7 +45,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 export function registerBatchTool(server: McpServer): void {
 	server.tool(
 		"figma_batch",
-		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Recommended batch-friendly tools: figma_get_file_data, figma_get_variables, figma_get_styles, figma_get_component, figma_get_component_keys, figma_get_selection, figma_get_library_components. Screenshot and image tools (figma_take_screenshot, figma_get_component_image, figma_capture_screenshot) return large payloads that can overflow batch responses — call those as standalone requests instead.",
+		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Recommended batch-friendly tools: figma_get_file_data, figma_get_variables, figma_get_styles, figma_find_components, figma_get_selection, figma_get_library_components. Screenshot tools (figma_screenshot) return large payloads that can overflow batch responses — call those as standalone requests instead.",
 		{
 			operations: z
 				.array(
@@ -69,7 +70,7 @@ export function registerBatchTool(server: McpServer): void {
 				)
 				.min(1)
 				.max(MAX_OPERATIONS)
-				.describe("Array of tool operations to execute (1-10)"),
+				.describe("Array of tool operations to execute (1-25)"),
 			parallel: z
 				.boolean()
 				.optional()
@@ -89,7 +90,7 @@ export function registerBatchTool(server: McpServer): void {
 			idempotentHint: false,
 			openWorldHint: true,
 		},
-		async ({ operations, parallel, verbose }) => {
+		async ({ operations, parallel, verbose }, extra) => {
 			const registeredTools = (server as any)._registeredTools as Record<
 				string,
 				any
@@ -139,7 +140,7 @@ export function registerBatchTool(server: McpServer): void {
 
 					// Execute the tool handler with timeout
 					const result = await withTimeout(
-						Promise.resolve(tool.handler(parsedArgs, {})),
+						Promise.resolve(tool.handler(parsedArgs, extra)),
 						OPERATION_TIMEOUT_MS,
 					);
 
@@ -165,52 +166,85 @@ export function registerBatchTool(server: McpServer): void {
 			}
 
 			let results: OperationResult[];
+			const total = operations.length;
 			if (parallel) {
+				await sendProgress(extra, 0, total, `Executing ${total} operations in parallel...`);
 				results = await Promise.all(
 					operations.map((op, i) => executeOperation(op, i)),
 				);
+				await sendProgress(extra, total, total, `All ${total} operations complete`);
 			} else {
 				results = [];
+				await sendProgress(extra, 0, total, `Executing ${total} operations sequentially...`);
 				for (let i = 0; i < operations.length; i++) {
 					results.push(await executeOperation(operations[i], i));
+					await sendProgress(extra, i + 1, total, `Completed ${i + 1}/${total}: ${operations[i].tool}`);
 				}
 			}
 
 			const succeeded = results.filter((r) => r.success).length;
 			const failed = results.length - succeeded;
 
-			const summary = `Batch complete: ${succeeded}/${results.length} succeeded${failed > 0 ? `, ${failed} failed` : ""}`;
+			const header = `Batch: ${succeeded}/${results.length} succeeded${failed > 0 ? `, ${failed} failed` : ""}`;
 
-			// When verbose=false, compact successful sub-tool results to key fields only
-			const outputResults = verbose
-				? results
-				: results.map((r) => {
-					if (!r.success || !r.result) return r;
-					try {
-						// Parse sub-tool response content to extract summary fields
-						const content = Array.isArray(r.result) ? r.result : [r.result];
-						const textContent = content.find((c: any) => c.type === "text");
-						if (!textContent?.text) return r;
-						const parsed = JSON.parse(textContent.text);
-						// Extract only top-level summary/key fields
-						const compactKeys = ["summary", "id", "name", "count", "success", "componentName", "parityScore", "ai_instruction", "error"];
-						const compact: Record<string, unknown> = {};
-						for (const key of compactKeys) {
-							if (key in parsed) compact[key] = parsed[key];
+			// Format each result as readable text
+			const lines: string[] = [header, ""];
+			for (const r of results) {
+				// Extract the text content from the sub-tool response
+				let body = "";
+				if (r.error) {
+					body = `Error: ${r.error}`;
+				} else if (r.result) {
+					const content = Array.isArray(r.result) ? r.result : [r.result];
+					const textContent = content.find((c: any) => c.type === "text");
+					body = textContent?.text || "(no output)";
+					// If the sub-tool returned JSON (legacy/non-node tools), try to extract a summary
+					if (body.startsWith("{") || body.startsWith("[")) {
+						try {
+							const parsed = JSON.parse(body);
+							if (parsed.message) body = parsed.message;
+							else if (parsed.summary) body = parsed.summary;
+							else if (parsed.error) body = `Error: ${parsed.error}`;
+							else if (!verbose) {
+								// Compact: show only key fields
+								const compactKeys = ["summary", "id", "name", "type", "count", "success", "message", "applied", "hint", "error"];
+								const compact: Record<string, unknown> = {};
+								for (const key of compactKeys) {
+									if (key in parsed) compact[key] = parsed[key];
+								}
+								body = Object.keys(compact).length > 0 ? JSON.stringify(compact) : body;
+							}
+						} catch {
+							// Keep as-is if not parseable
 						}
-						// If no recognized keys found, keep original
-						if (Object.keys(compact).length === 0) return r;
-						return { ...r, result: [{ type: "text", text: JSON.stringify(compact) }] };
-					} catch {
-						return r;
 					}
-				});
+				}
+
+				const status = r.success ? "ok" : "FAIL";
+				const prefix = `[${r.id}] ${r.tool} — ${status}`;
+
+				// Indent multi-line bodies under the prefix
+				const bodyLines = body.split("\n");
+				if (bodyLines.length === 1) {
+					lines.push(`${prefix}: ${body}`);
+				} else {
+					lines.push(`${prefix}:`);
+					for (const bl of bodyLines) {
+						lines.push(`  ${bl}`);
+					}
+				}
+			}
+
+			if (verbose) {
+				const totalMs = results.reduce((sum, r) => sum + r.durationMs, 0);
+				lines.push("", `Total time: ${totalMs}ms`);
+			}
 
 			return {
 				content: [
 					{
 						type: "text" as const,
-						text: JSON.stringify({ summary, results: outputResults }),
+						text: lines.join("\n"),
 					},
 				],
 			};
