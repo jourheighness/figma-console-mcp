@@ -703,14 +703,6 @@ function resolveVariableAliases(
 }
 
 /**
- * Options for registering Figma API tools
- */
-interface FigmaAPIToolsOptions {
-	/** When true, suppresses Desktop Bridge mentions in tool descriptions (for remote/cloud mode) */
-	isRemoteMode?: boolean;
-}
-
-/**
  * Register Figma API tools with the MCP server
  */
 export function registerFigmaAPITools(
@@ -721,10 +713,8 @@ export function registerFigmaAPITools(
 	getBrowserManager?: () => any,
 	ensureInitialized?: () => Promise<void>,
 	variablesCache?: Map<string, { data: any; timestamp: number }>,
-	options?: FigmaAPIToolsOptions,
 	getDesktopConnector?: () => Promise<any>,
 ) {
-	const isRemoteMode = options?.isRemoteMode ?? false;
 	// Tool 8: Get File Data (General Purpose, with plugin scope option)
 	// NOTE: For specific use cases, consider using specialized tools:
 	// - figma_get_component format='development': For UI component implementation
@@ -2656,9 +2646,7 @@ export function registerFigmaAPITools(
 	);
 
 	// Tool 10: Get Component Data
-	const componentDescription = isRemoteMode
-		? "Get component data in multiple formats: 'metadata' (default) — properties, variants, design tokens; 'reconstruction' — node tree spec for Reconstructor plugin; 'development' — filtered layout/visual props + optional image for UI implementation. Batch-compatible."
-		: "Get component data in multiple formats: 'metadata' (default) — properties, variants, design tokens; 'reconstruction' — node tree spec for Reconstructor plugin; 'development' — filtered layout/visual props + optional image for UI implementation. For local/unpublished components, ensure the Desktop Bridge plugin is running. Batch-compatible.";
+	const componentDescription = "Get component data in multiple formats: 'metadata' (default) — properties, variants, design tokens; 'reconstruction' — node tree spec for Reconstructor plugin; 'development' — filtered layout/visual props + optional image for UI implementation. For local/unpublished components, ensure the Desktop Bridge plugin is running. Batch-compatible.";
 	server.tool(
 		"figma_get_component",
 		componentDescription,

@@ -14,10 +14,7 @@ export interface NavigationResult {
 
 /**
  * Browser Manager Interface
- * Provides unified API for browser automation regardless of runtime (Cloudflare/Local)
- *
- * Note: Uses 'any' for Page type to support both puppeteer-core and @cloudflare/puppeteer
- * implementations which have incompatible type definitions but compatible runtime behavior
+ * Provides unified API for browser automation
  */
 export interface IBrowserManager {
 	/**

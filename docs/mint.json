@@ -55,8 +55,7 @@
       "pages": [
         "index",
         "introduction",
-        "setup",
-        "mode-comparison"
+        "setup"
       ]
     },
     {
@@ -73,9 +72,7 @@
         "tools",
         "architecture",
         "security",
-        "reconstruction-format",
-        "oauth-setup",
-        "self-hosting"
+        "reconstruction-format"
       ]
     }
   ],

@@ -25,15 +25,10 @@ Enable AI coding assistants (Claude Code, Cursor, etc.) to interact with Figma i
 
 ## Architecture
 
-Two deployment modes:
-
 ### Local Mode (Desktop Bridge)
 - Connects to Figma Desktop via plugin
 - Full read/write capabilities via specialized tools
-
-### Cloudflare Mode
-- REST API for read-only operations
-- Scalable cloud deployment
+- REST API for read-only design system extraction
 
 ## Core Tool Categories
 

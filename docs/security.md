@@ -9,20 +9,12 @@ Figma Console MCP is designed with security as a priority. The project is **full
 
 ### Deployment Modes
 
-<CardGroup cols={2}>
-  <Card title="Local Mode" icon="laptop">
-    **Recommended for security-sensitive environments**
-    - Runs entirely on localhost via stdio
-    - Zero external network calls
-    - All communication stays local
-  </Card>
-  <Card title="Remote Mode" icon="cloud">
-    **For browser-based MCP clients**
-    - SSE transport via Cloudflare Workers
-    - OAuth tokens handled server-side
-    - All traffic encrypted (HTTPS)
-  </Card>
-</CardGroup>
+<Card title="Local Mode" icon="laptop">
+  **Recommended for security-sensitive environments**
+  - Runs entirely on localhost via stdio
+  - Zero external network calls
+  - All communication stays local
+</Card>
 
 ### Data Handling
 
@@ -37,19 +29,12 @@ Figma Console MCP is designed with security as a priority. The project is **full
 
 Figma Console MCP uses **Figma's native authentication**:
 
-<AccordionGroup>
-  <Accordion title="Personal Access Tokens (PATs)" icon="key">
-    - Generated in Figma account settings
-    - Stored locally in your MCP client config
-    - Never transmitted except to `api.figma.com`
-    - Scoped permissions based on token configuration
-  </Accordion>
-  <Accordion title="OAuth (Remote Mode)" icon="right-to-bracket">
-    - Uses Figma's official OAuth 2.0 flow
-    - Tokens managed via Figma's authorization servers
-    - No custom credential handling
-  </Accordion>
-</AccordionGroup>
+<Accordion title="Personal Access Tokens (PATs)" icon="key">
+  - Generated in Figma account settings
+  - Stored locally in your MCP client config
+  - Never transmitted except to `api.figma.com`
+  - Scoped permissions based on token configuration
+</Accordion>
 
 ## Code Execution (Design Manipulation Tools)
 
@@ -98,7 +83,6 @@ All network communication is limited to:
 - `api.figma.com` — Figma's official REST API (HTTPS)
 - `localhost:9223` — WebSocket Bridge (Desktop Bridge Plugin communication)
 - `localhost:9222` — CDP (Chrome DevTools Protocol, alternative transport)
-- `*.workers.dev` — Remote mode only (HTTPS)
 
 ### WebSocket Bridge Security
 - **Localhost-only binding** — The WebSocket server binds to `localhost` only, not accessible from external networks
@@ -126,9 +110,6 @@ All network communication is limited to:
   <Step title="Use Local Mode">
     Deploy with stdio transport for zero external network calls
   </Step>
-  <Step title="Self-Host (Optional)">
-    Run your own Cloudflare Worker instance. See [Self-Hosting Guide](/self-hosting).
-  </Step>
   <Step title="Allowlist Figma API">
     Only `api.figma.com` needs network access
   </Step>
@@ -155,7 +136,7 @@ Please use GitHub's private security advisory feature rather than public issues.
 - Open source and auditable (MIT license)
 - No data persistence or storage
 - No telemetry or analytics
-- Platform-native authentication (Figma OAuth/PATs)
+- Platform-native authentication (Figma Personal Access Tokens)
 - Code execution sandboxed in Figma plugin environment
 - Local-only deployment option available
 - All network traffic encrypted (HTTPS)

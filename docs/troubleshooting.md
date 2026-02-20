@@ -7,44 +7,7 @@ description: "Solutions to common issues including browser connection, console l
 
 ## Common Issues and Solutions
 
-### Issue: Claude Code OAuth Completes But Connection Fails
-
-**Symptoms:**
-- Using Claude Code with `claude mcp add --transport sse`
-- OAuth opens in browser and you authorize successfully
-- Connection never establishes after OAuth
-- Server shows "figma-console: not connected" in `/mcp`
-
-**Cause:**
-This is a [known bug in Claude Code's HTTP/SSE transport](https://github.com/anthropics/claude-code/issues/2466). The native SSE transport doesn't properly reconnect after completing the OAuth flow.
-
-**Solution:**
-Use the `mcp-remote` package instead of Claude Code's native SSE transport:
-
-```bash
-claude mcp add figma-console -s user -- npx -y mcp-remote@latest https://figma-console-mcp.southleft.com/sse
-```
-
-Or add to `~/.claude.json` manually:
-
-```json
-{
-  "mcpServers": {
-    "figma-console": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote@latest", "https://figma-console-mcp.southleft.com/sse"]
-    }
-  }
-}
-```
-
-Restart Claude Code (`/mcp` to reconnect) — mcp-remote will open a browser for OAuth, and the connection will work correctly.
-
-**Alternative:** If you're using Claude Code, consider using [Local Mode](/setup#local-mode-setup-advanced) instead. It provides the full feature set including the Desktop Bridge plugin, and doesn't require OAuth (uses a Personal Access Token).
-
----
-
-### Plugin Debugging: Simple Workflow ✅
+### Plugin Debugging: Simple Workflow
 
 **For Plugin Developers in Local Mode:**
 
@@ -251,7 +214,6 @@ Should show:
 - `initialized: true`
 - `consoleMonitor.isMonitoring: true`
 
-**Note:** If using the public server at `https://figma-console-mcp.southleft.com`, browser launch is handled automatically and should work without issues.
 
 ---
 
@@ -342,9 +304,8 @@ figma_get_console_logs({ level: 'warn' })    // Only warnings
 - Intermittent failures
 
 **Possible Causes:**
-1. Cloudflare Workers cold start
-2. Browser initialization takes time
-3. Figma page load is slow
+1. Browser initialization takes time
+2. Figma page load is slow
 
 **Solutions:**
 
@@ -360,21 +321,6 @@ Just wait - subsequent calls will be faster!
 This is a lightweight call that doesn't require browser initialization:
 ```
 figma_get_status()  // Fast, shows current state
-```
-
-#### Check Server Health
-```bash
-curl https://figma-console-mcp.southleft.com/health
-```
-
-Should return:
-```json
-{
-  "status": "healthy",
-  "service": "Figma Console MCP",
-  "version": "0.1.0",
-  "endpoints": ["/sse", "/mcp", "/test-browser"]
-}
 ```
 
 ---
@@ -397,33 +343,20 @@ Should return:
   "mcpServers": {
     "figma-console": {
       "command": "npx",
-      "args": [
-        "mcp-remote",
-        "https://figma-console-mcp.southleft.com/sse"
-      ]
+      "args": ["-y", "figma-console-mcp@latest"],
+      "env": {
+        "FIGMA_ACCESS_TOKEN": "figd_YOUR_TOKEN_HERE"
+      }
     }
   }
 }
 ```
-
-**Important:** URL must be exactly `https://figma-console-mcp.southleft.com/sse` (note the `/sse` endpoint).
 
 #### Restart Claude Desktop
 After changing configuration:
 1. Quit Claude Desktop completely
 2. Restart it
 3. Check the tools menu
-
-#### Verify mcp-remote
-Make sure `mcp-remote` is installed:
-```bash
-npm list -g mcp-remote
-```
-
-If not installed:
-```bash
-npm install -g mcp-remote
-```
 
 ---
 
@@ -487,16 +420,7 @@ If you're still experiencing issues:
    - Error messages include specific troubleshooting steps
    - Follow the hints provided
 
-2. **Verify Deployment**
-   ```bash
-   curl https://figma-console-mcp.southleft.com/health
-   ```
-
-3. **Check Cloudflare Status**
-   - Visit status.cloudflare.com
-   - Browser Rendering API status
-
-4. **Report Issues**
+2. **Report Issues**
    - GitHub Issues: https://github.com/southleft/figma-console-mcp/issues
    - Include error messages
    - Include steps to reproduce
@@ -584,4 +508,4 @@ Create `~/.config/figma-console-mcp/config.json`:
 }
 ```
 
-**Note:** Custom configuration is optional. The public server at `https://figma-console-mcp.southleft.com` uses sensible defaults that work for most use cases.
+**Note:** Custom configuration is optional. Sensible defaults are used out of the box.

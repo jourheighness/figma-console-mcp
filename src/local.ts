@@ -66,7 +66,7 @@ const logger = createChildLogger({ component: "local-server" });
 
 /**
  * Local MCP Server
- * Connects to Figma Desktop and provides identical tools to Cloudflare mode
+ * Connects to Figma Desktop and provides all MCP tools
  */
 class LocalFigmaConsoleMCP {
 	private server: McpServer;
@@ -553,7 +553,6 @@ class LocalFigmaConsoleMCP {
 			() => this.browserManager || null,
 			() => this.ensureInitialized(),
 			this.variablesCache, // Pass cache for efficient variable queries
-			undefined, // options (use default)
 			() => this.getDesktopConnector(), // Transport-aware connector factory
 		);
 
@@ -1046,9 +1045,22 @@ class LocalFigmaConsoleMCP {
 				// Figma's documentchange API doesn't expose a specific variable change type —
 				// variable operations manifest as node PROPERTY_CHANGE events, so we invalidate
 				// on any style or node change to be safe.
+				// Per-file debounce: skip invalidation if we already invalidated this fileKey
+				// within the last 1 second. The client-side debounce (ui.html) is the primary
+				// control; this is a safety net for burst events.
+				const lastInvalidationTime = new Map<string, number>();
+				const INVALIDATION_DEBOUNCE_MS = 1000;
+
 				this.wsServer.on("documentChange", (data: any) => {
 					if (data.hasStyleChanges || data.hasNodeChanges) {
 						if (data.fileKey) {
+							const now = Date.now();
+							const lastTime = lastInvalidationTime.get(data.fileKey) || 0;
+							if (now - lastTime < INVALIDATION_DEBOUNCE_MS) {
+								return; // Skip — already invalidated recently
+							}
+							lastInvalidationTime.set(data.fileKey, now);
+
 							// Per-file cache invalidation — only clear the affected file's cache
 							this.variablesCache.delete(data.fileKey);
 							this.sessionCache.invalidateFile(data.fileKey);

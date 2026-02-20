@@ -70,7 +70,7 @@ export interface PluginContext {
  * Server configuration
  */
 export interface ServerConfig {
-  mode: 'local' | 'cloudflare';
+  mode: 'local';
   browser: BrowserConfig;
   console: ConsoleConfig;
   screenshots: ScreenshotConfig;

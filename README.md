@@ -19,7 +19,7 @@ Figma Console MCP connects AI assistants (like Claude) to Figma, enabling:
 - **✏️ Design creation** - Create UI components, frames, and layouts directly in Figma
 - **🔧 Variable management** - Create, update, rename, and delete design tokens
 - **⚡ Real-time monitoring** - Watch logs as plugins execute
-- **🔄 Three ways to install** - Remote SSE (OAuth, zero-setup), NPX (npm package), or Local Git (source code)
+- **🔄 Two ways to install** - NPX (npm package) or Local Git (source code)
 
 ---
 
@@ -33,20 +33,6 @@ Figma Console MCP connects AI assistants (like Claude) to Figma, enabling:
 |--------------|--------------|------|
 | **Create and modify designs with AI** | [NPX Setup](#-npx-setup-recommended) (Recommended) | ~10 min |
 | **Contribute to the project** | [Local Git Setup](#for-contributors-local-git-mode) | ~15 min |
-| **Just explore my design data** (read-only) | [Remote SSE](#-remote-sse-read-only-exploration) | ~2 min |
-
-### ⚠️ Important: Capability Differences
-
-| Capability | NPX / Local Git | Remote SSE |
-|------------|-----------------|------------|
-| Read design data | ✅ | ✅ |
-| **Create components & frames** | ✅ | ❌ |
-| **Edit existing designs** | ✅ | ❌ |
-| **Manage design tokens/variables** | ✅ | ❌ |
-| Desktop Bridge plugin | ✅ | ❌ |
-| **Total tools available** | **56+** | **16** |
-
-> **Bottom line:** Remote SSE is **read-only** with ~34% of the tools. If you want AI to actually design in Figma, use NPX Setup.
 
 ---
 
@@ -191,74 +177,18 @@ Then follow [NPX Steps 3-5](#step-3-connect-to-figma-desktop) above.
 
 ---
 
-### 📡 Remote SSE (Read-Only Exploration)
-
-**Best for:** Quickly evaluating the tool or read-only design data extraction.
-
-**What you get:** 21 read-only tools — view data, take screenshots, read logs, design-code parity. **Cannot create or modify designs.**
-
-#### Claude Desktop (UI Method)
-
-1. Open Claude Desktop → **Settings** → **Connectors**
-2. Click **"Add Custom Connector"**
-3. Enter:
-   - **Name:** `Figma Console (Read-Only)`
-   - **URL:** `https://figma-console-mcp.southleft.com/sse`
-4. Click **"Add"** — Done! ✅
-
-OAuth authentication happens automatically when you first use design system tools.
-
-#### Claude Code
-
-> **⚠️ Known Issue:** Claude Code's native `--transport sse` has a [bug](https://github.com/anthropics/claude-code/issues/2466). Use `mcp-remote` instead:
-
-```bash
-claude mcp add figma-console -s user -- npx -y mcp-remote@latest https://figma-console-mcp.southleft.com/sse
-```
-
-**💡 Tip:** For full capabilities, use [NPX Setup](#-npx-setup-recommended) instead of Remote SSE.
-
-#### Other Clients (Cursor, Windsurf, etc.)
-
-```json
-{
-  "mcpServers": {
-    "figma-console": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://figma-console-mcp.southleft.com/sse"]
-    }
-  }
-}
-```
-
-#### Upgrading to Full Capabilities
-
-Ready for design creation? Follow the [NPX Setup](#-npx-setup-recommended) guide above.
-
-**📖 [Complete Setup Guide](docs/setup.md)**
-
----
-
 ## 📊 Installation Method Comparison
 
-| Feature | NPX (Recommended) | Local Git | Remote SSE |
-|---------|-------------------|-----------|------------|
-| **Setup time** | ~10 minutes | ~15 minutes | ~2 minutes |
-| **Total tools** | **56+** | **56+** | **21** (read-only) |
-| **Design creation** | ✅ | ✅ | ❌ |
-| **Variable management** | ✅ | ✅ | ❌ |
-| **Component instantiation** | ✅ | ✅ | ❌ |
-| **Desktop Bridge plugin** | ✅ | ✅ | ❌ |
-| **Variables (no Enterprise)** | ✅ | ✅ | ❌ |
-| **Console logs** | ✅ (zero latency) | ✅ (zero latency) | ✅ |
-| **Read design data** | ✅ | ✅ | ✅ |
-| **Authentication** | PAT (manual) | PAT (manual) | OAuth (automatic) |
-| **Automatic updates** | ✅ (`@latest`) | Manual (`git pull`) | ✅ |
-| **Source code access** | ❌ | ✅ | ❌ |
-
-> **Key insight:** Remote SSE is read-only with ~34% of the tools. Use NPX for full capabilities.
-
-**📖 [Complete Feature Comparison](docs/mode-comparison.md)**
+| Feature | NPX (Recommended) | Local Git |
+|---------|-------------------|-----------|
+| **Setup time** | ~10 minutes | ~15 minutes |
+| **Total tools** | **56+** | **56+** |
+| **Design creation** | ✅ | ✅ |
+| **Variable management** | ✅ | ✅ |
+| **Component instantiation** | ✅ | ✅ |
+| **Desktop Bridge plugin** | ✅ | ✅ |
+| **Automatic updates** | ✅ (`@latest`) | Manual (`git pull`) |
+| **Source code access** | ❌ | ✅ |
 
 ---
 
@@ -285,18 +215,10 @@ Show me the primary font for [your theme name]
 
 ## 🔐 Authentication
 
-### Remote Mode - OAuth (Automatic)
-
-When you first use design system tools:
-1. Browser opens automatically to Figma authorization page
-2. Click "Allow" to authorize (one-time)
-3. Token stored securely and refreshed automatically
-4. Works with Free, Pro, and Enterprise Figma plans
-
-### Local Mode - Personal Access Token (Manual)
+### Personal Access Token
 
 1. Visit https://www.figma.com/developers/api#access-tokens
-2. Generate token
+2. Generate token (starts with `figd_`)
 3. Add to MCP config as `FIGMA_ACCESS_TOKEN` environment variable
 
 ---
@@ -414,7 +336,7 @@ Navigate to this file and capture what's on screen
 
 ## 🎨 AI-Assisted Design Creation
 
-> **⚠️ Local Mode Only:** This feature requires the Desktop Bridge plugin and only works with Local Mode installation (NPX or Local Git). Remote Mode is read-only and cannot create or modify designs.
+> **Requires Desktop Bridge Plugin:** This feature requires the Desktop Bridge plugin running in Figma Desktop.
 
 One of the most powerful capabilities of this MCP server is the ability to **design complete UI components and pages directly in Figma through natural language conversation** with any MCP-compatible AI assistant like Claude Desktop or Claude Code.
 
@@ -531,7 +453,7 @@ The **Figma Desktop Bridge** plugin is the recommended way to connect Figma to t
 - `FIGMA_WS_PORT` — Override the preferred WebSocket port (default: 9223). The server will fall back through a 10-port range starting from this value if the preferred port is occupied.
 - `FIGMA_WS_HOST` — Override the WebSocket server bind address (default: `localhost`). Set to `0.0.0.0` when running inside Docker so the host machine can reach the MCP server.
 
-**Plugin Limitation:** Only works in Local Mode (NPX or Local Git). Remote SSE mode cannot access it.
+**Plugin Limitation:** Requires Local Mode (NPX or Local Git) installation.
 
 ---
 
@@ -630,9 +552,7 @@ The architecture supports adding new apps with minimal boilerplate — each app 
 ## 🚀 Advanced Topics
 
 - **[Setup Guide](docs/SETUP.md)** - Complete setup guide for all MCP clients
-- **[Self-Hosting](docs/SELF_HOSTING.md)** - Deploy your own instance on Cloudflare
 - **[Architecture](docs/ARCHITECTURE.md)** - How it works under the hood
-- **[OAuth Setup](docs/OAUTH_SETUP.md)** - Configure OAuth for self-hosted deployments
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
 
 ---
@@ -644,7 +564,7 @@ The architecture supports adding new apps with minimal boilerplate — each app 
 - ✅ Screenshot capture and visual debugging
 - ✅ Error stack traces and runtime monitoring
 - ✅ Raw design data extraction (JSON)
-- ✅ Works remotely or locally
+- ✅ Runs locally with full Desktop Bridge support
 
 **Figma Official Dev Mode MCP** - Code generation
 - ✅ Generates React/HTML code from designs
@@ -684,14 +604,11 @@ git clone https://github.com/southleft/figma-console-mcp.git
 cd figma-console-mcp
 npm install
 
-# Local mode development
+# Development mode
 npm run dev:local
 
-# Cloud mode development
-npm run dev
-
 # Build
-npm run build
+npm run build:local
 ```
 
 **📖 [Development Guide](docs/ARCHITECTURE.md)**

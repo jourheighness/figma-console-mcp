@@ -244,6 +244,30 @@
     }
 
     var workingTimer = null;
+    var activityIntervalId = null;
+    var ACTIVITY_IDLE_STOP_MS = 5 * 60 * 1000; // 5 minutes
+
+    function startActivityInterval() {
+      if (activityIntervalId) return; // Already running
+      activityIntervalId = setInterval(function() {
+        if (statusState.lastActivityTs > 0) {
+          var ago = Math.round((Date.now() - statusState.lastActivityTs) / 1000);
+          var text;
+          if (ago < 2) text = 'Last activity: just now';
+          else if (ago < 60) text = 'Last activity: ' + ago + 's ago';
+          else if (ago < 3600) text = 'Last activity: ' + Math.floor(ago / 60) + 'm ago';
+          else text = 'Last activity: ' + Math.floor(ago / 3600) + 'h ago';
+          document.getElementById('activity-line').textContent = text;
+
+          // Stop updating after 5 minutes of no activity
+          if (Date.now() - statusState.lastActivityTs > ACTIVITY_IDLE_STOP_MS) {
+            clearInterval(activityIntervalId);
+            activityIntervalId = null;
+          }
+        }
+      }, 1000);
+    }
+
     function touchActivity() {
       statusState.lastActivityTs = Date.now();
 
@@ -254,20 +278,10 @@
       workingTimer = setTimeout(function() {
         dot.classList.remove('working');
       }, 3000);
-    }
 
-    // Update activity line every second
-    setInterval(function() {
-      if (statusState.lastActivityTs > 0) {
-        var ago = Math.round((Date.now() - statusState.lastActivityTs) / 1000);
-        var text;
-        if (ago < 2) text = 'Last activity: just now';
-        else if (ago < 60) text = 'Last activity: ' + ago + 's ago';
-        else if (ago < 3600) text = 'Last activity: ' + Math.floor(ago / 60) + 'm ago';
-        else text = 'Last activity: ' + Math.floor(ago / 3600) + 'h ago';
-        document.getElementById('activity-line').textContent = text;
-      }
-    }, 1000);
+      // Restart activity display interval if stopped
+      startActivityInterval();
+    }
 
     // Legacy updateStatus — called by message handler
     function updateStatus(state, isActive, isError) {
@@ -774,6 +788,13 @@
               clearTimeout(timeout);
               foundAny = true;
 
+              // Enforce connection cap
+              if (activeConnections.length >= MAX_ACTIVE_CONNECTIONS) {
+                testWs.close();
+                pending--;
+                return;
+              }
+
               // Add to active connections
               activeConnections.push({ port: port, ws: testWs });
               updateCompatState();
@@ -976,42 +997,158 @@
       };
 
       // Forward DOCUMENT_CHANGE events to all servers for cache invalidation
-      window.__wsForwardDocumentChange = function(data) {
-        if (wsConnected) {
-          broadcastToAll({ type: 'DOCUMENT_CHANGE', data: data });
+      // Debounced: collect events, flush after 500ms quiet or 2s max wait
+      var __docChangePending = null;  // coalesced event data
+      var __docChangeQuietTimer = null;
+      var __docChangeMaxTimer = null;
+      var DOC_CHANGE_QUIET_MS = 500;
+      var DOC_CHANGE_MAX_MS = 2000;
+
+      function __flushDocumentChange() {
+        clearTimeout(__docChangeQuietTimer);
+        clearTimeout(__docChangeMaxTimer);
+        __docChangeQuietTimer = null;
+        __docChangeMaxTimer = null;
+        if (__docChangePending && wsConnected) {
+          broadcastToAll({ type: 'DOCUMENT_CHANGE', data: __docChangePending });
         }
+        __docChangePending = null;
+      }
+
+      window.__wsForwardDocumentChange = function(data) {
+        if (!wsConnected) return;
+
+        // Coalesce into pending batch
+        if (!__docChangePending) {
+          __docChangePending = {
+            hasStyleChanges: data.hasStyleChanges,
+            hasNodeChanges: data.hasNodeChanges,
+            changedNodeIds: (data.changedNodeIds || []).slice(0, 50),
+            changeCount: data.changeCount || 0,
+            timestamp: data.timestamp || Date.now()
+          };
+          // Start max-wait ceiling timer on first event
+          __docChangeMaxTimer = setTimeout(__flushDocumentChange, DOC_CHANGE_MAX_MS);
+        } else {
+          __docChangePending.hasStyleChanges = __docChangePending.hasStyleChanges || data.hasStyleChanges;
+          __docChangePending.hasNodeChanges = __docChangePending.hasNodeChanges || data.hasNodeChanges;
+          __docChangePending.changeCount += (data.changeCount || 0);
+          // Union changedNodeIds, capped at 50
+          var ids = data.changedNodeIds || [];
+          for (var i = 0; i < ids.length && __docChangePending.changedNodeIds.length < 50; i++) {
+            if (__docChangePending.changedNodeIds.indexOf(ids[i]) === -1) {
+              __docChangePending.changedNodeIds.push(ids[i]);
+            }
+          }
+        }
+
+        // Reset quiet timer on every event
+        clearTimeout(__docChangeQuietTimer);
+        __docChangeQuietTimer = setTimeout(__flushDocumentChange, DOC_CHANGE_QUIET_MS);
       };
 
       // Forward CONSOLE_CAPTURE events to all servers for console monitoring
+      // Batched: buffer entries for 200ms, flush as single CONSOLE_CAPTURE_BATCH
+      var __consoleBatchBuffer = [];
+      var __consoleBatchTimer = null;
+      var CONSOLE_BATCH_MS = 200;
+      var CONSOLE_BATCH_MAX = 50;
+
+      function __flushConsoleBatch() {
+        clearTimeout(__consoleBatchTimer);
+        __consoleBatchTimer = null;
+        if (__consoleBatchBuffer.length > 0 && wsConnected) {
+          broadcastToAll({ type: 'CONSOLE_CAPTURE_BATCH', entries: __consoleBatchBuffer });
+        }
+        __consoleBatchBuffer = [];
+      }
+
       window.__wsForwardConsoleCapture = function(data) {
-        if (wsConnected) {
-          broadcastToAll({ type: 'CONSOLE_CAPTURE', data: data });
+        if (!wsConnected) return;
+
+        __consoleBatchBuffer.push(data);
+
+        // Flush immediately if buffer is full
+        if (__consoleBatchBuffer.length >= CONSOLE_BATCH_MAX) {
+          __flushConsoleBatch();
+          return;
+        }
+
+        // Otherwise flush after quiet period
+        if (!__consoleBatchTimer) {
+          __consoleBatchTimer = setTimeout(__flushConsoleBatch, CONSOLE_BATCH_MS);
         }
       };
 
       // Forward SELECTION_CHANGE events to all servers for selection tracking
+      // Throttled: forward immediately on first event, then suppress for 250ms
+      // with trailing-edge behavior (last event in window always sent)
+      var __selThrottleTimer = null;
+      var __selPendingData = null;
+      var __selLastForwardTime = 0;
+      var SEL_THROTTLE_MS = 250;
+
       window.__wsForwardSelectionChange = function(data) {
-        if (wsConnected) {
+        if (!wsConnected) return;
+
+        var now = Date.now();
+        if (now - __selLastForwardTime >= SEL_THROTTLE_MS) {
+          // Outside throttle window — forward immediately
           broadcastToAll({ type: 'SELECTION_CHANGE', data: data });
+          __selLastForwardTime = now;
+          __selPendingData = null;
+          clearTimeout(__selThrottleTimer);
+          __selThrottleTimer = null;
+        } else {
+          // Inside throttle window — save for trailing edge
+          __selPendingData = data;
+          if (!__selThrottleTimer) {
+            __selThrottleTimer = setTimeout(function() {
+              __selThrottleTimer = null;
+              if (__selPendingData && wsConnected) {
+                broadcastToAll({ type: 'SELECTION_CHANGE', data: __selPendingData });
+                __selLastForwardTime = Date.now();
+                __selPendingData = null;
+              }
+            }, SEL_THROTTLE_MS - (now - __selLastForwardTime));
+          }
         }
       };
 
       // Forward PAGE_CHANGE events to all servers for page tracking
+      // Deduped: only forward if page name actually changed
+      var __lastForwardedPageName = null;
+
       window.__wsForwardPageChange = function(data) {
-        if (wsConnected) {
-          broadcastToAll({ type: 'PAGE_CHANGE', data: data });
-        }
+        if (!wsConnected) return;
+        if (data.pageName === __lastForwardedPageName) return;
+        __lastForwardedPageName = data.pageName;
+        broadcastToAll({ type: 'PAGE_CHANGE', data: data });
       };
+
+      // Cap active connections — 5 simultaneous MCP servers is more than enough
+      var MAX_ACTIVE_CONNECTIONS = 5;
 
       // Start WebSocket connection via port scanning
       wsScanAndConnect();
 
-      // Periodic background rescan every 30s to discover newly started MCP servers
-      rescanTimerId = setInterval(function() {
-        if (!isScanning) {
-          wsScanAndConnect();
-        }
-      }, 30000);
+      // Periodic background rescan to discover newly started MCP servers.
+      // When connected: rescan every 120s (slow — most users have 1 server).
+      // When disconnected: keep aggressive scanning (current backoff handles this).
+      var RESCAN_CONNECTED_MS = 120000;
+      var RESCAN_DISCONNECTED_MS = 30000;
+
+      function scheduleRescan() {
+        clearTimeout(rescanTimerId);
+        var interval = activeConnections.length > 0 ? RESCAN_CONNECTED_MS : RESCAN_DISCONNECTED_MS;
+        rescanTimerId = setTimeout(function() {
+          if (!isScanning) {
+            wsScanAndConnect();
+          }
+          scheduleRescan();
+        }, interval);
+      }
+      scheduleRescan();
     })();
 
     // ============================================================================

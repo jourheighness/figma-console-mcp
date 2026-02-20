@@ -7,33 +7,9 @@ description: "Deep dive into Figma Console MCP's architecture, deployment modes,
 
 ## Overview
 
-Figma Console MCP provides AI assistants with real-time access to Figma for debugging, design system extraction, and design creation. The server supports two deployment modes with different capabilities.
+Figma Console MCP provides AI assistants with real-time access to Figma for debugging, design system extraction, and design creation.
 
-## Deployment Modes
-
-### Remote Mode (SSE/OAuth)
-
-**Best for:** Design system extraction, API-based operations, zero-setup experience
-
-```mermaid
-flowchart TB
-    AI[AI Assistant]
-    AI -->|SSE| WORKER
-    WORKER[Cloudflare Worker]
-    WORKER --> MCP[MCP Protocol]
-    MCP --> CLIENT[REST Client]
-    CLIENT -->|HTTPS| API[Figma API]
-```
-
-**Capabilities:**
-- Design system extraction (variables, styles, components)
-- File structure queries
-- Component images
-- Console log capture (requires local)
-- Design creation (requires Desktop Bridge)
-- Variable management (requires Desktop Bridge)
-
----
+## Architecture
 
 ### Local Mode (Desktop Bridge)
 
@@ -64,7 +40,9 @@ flowchart TB
 The MCP server checks WebSocket first (instant). If no plugin client is connected, it falls back to CDP. Both transports can be active simultaneously — all 56+ tools work identically through either.
 
 **Capabilities:**
-- Everything in Remote Mode, plus:
+- Design system extraction (variables, styles, components)
+- File structure queries
+- Component images
 - Console log capture (real-time)
 - Design creation via Plugin API
 - Variable CRUD operations
@@ -81,7 +59,7 @@ The MCP server checks WebSocket first (instant). If no plugin client is connecte
 The main server implements the Model Context Protocol with stdio transport for local mode.
 
 **Key Responsibilities:**
-- Tool registration (56+ tools in Local Mode, 18 in Remote Mode)
+- Tool registration (56+ tools)
 - Request routing and validation
 - Figma API client management
 - Desktop Bridge communication
@@ -218,8 +196,7 @@ Used for design system extraction and file queries.
 | `GET /v1/images/:key` | Rendered images |
 
 **Authentication:**
-- **Remote Mode:** OAuth 2.0 with automatic token refresh
-- **Local Mode:** Personal Access Token via environment variable
+- Personal Access Token via environment variable
 
 ---
 
@@ -293,7 +270,6 @@ sequenceDiagram
 ### Authentication
 
 - **Personal Access Tokens:** Stored in environment variables, never logged
-- **OAuth Tokens:** Encrypted at rest, automatic refresh
 - **No credential storage:** Tokens passed per-request
 
 ### Sandboxing
@@ -366,8 +342,7 @@ npm run test:coverage
 ```
 figma-console-mcp/
 ├── src/
-│   ├── local.ts          # Main MCP server (local mode)
-│   ├── index.ts          # Cloudflare Workers entry (remote mode)
+│   ├── local.ts          # Main MCP server
 │   └── types/            # TypeScript definitions
 ├── figma-desktop-bridge/
 │   ├── code.ts           # Plugin main code

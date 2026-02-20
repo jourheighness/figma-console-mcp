@@ -8,29 +8,10 @@ import { join } from 'path';
 import type { ServerConfig } from './types/index.js';
 
 /**
- * Auto-detect server mode based on environment
- */
-function detectMode(): 'local' | 'cloudflare' {
-  // If running in Workers environment, return cloudflare
-  if (typeof globalThis !== 'undefined' && 'caches' in globalThis) {
-    return 'cloudflare';
-  }
-
-  // Explicit env var override
-  const modeEnv = process.env.FIGMA_MCP_MODE?.toLowerCase();
-  if (modeEnv === 'local' || modeEnv === 'cloudflare') {
-    return modeEnv;
-  }
-
-  // Default to local for Node.js environments
-  return 'local';
-}
-
-/**
  * Default configuration values
  */
 const DEFAULT_CONFIG: ServerConfig = {
-  mode: detectMode(),
+  mode: 'local',
   browser: {
     headless: false,
     args: [

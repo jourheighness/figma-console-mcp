@@ -532,6 +532,13 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 				value: z.number(),
 				unit: z.enum(["PIXELS", "PERCENT"]).optional().default("PIXELS"),
 			}).optional(),
+			textAlignHorizontal: z.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional().describe("Horizontal text alignment"),
+			textAlignVertical: z.enum(["TOP", "CENTER", "BOTTOM"]).optional().describe("Vertical text alignment"),
+			textAutoResize: z.enum(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]).optional().describe("How text resizes to fit"),
+			textDecoration: z.enum(["NONE", "UNDERLINE", "STRIKETHROUGH"]).optional().describe("Text decoration"),
+			textCase: z.enum(["ORIGINAL", "UPPER", "LOWER", "TITLE", "SMALL_CAPS", "SMALL_CAPS_FORCED"]).optional().describe("Text case transformation"),
+			paragraphSpacing: z.number().optional().describe("Spacing between paragraphs in px"),
+			paragraphIndent: z.number().optional().describe("First-line indent in px"),
 			// Effect style properties
 			effects: z.array(z.object({
 				type: z.enum(["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"]),
@@ -548,7 +555,7 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 			})).optional().describe("Effects for effect style"),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-		async ({ action, styleType, name, description, styleId, fills, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, effects }) => {
+		async ({ action, styleType, name, description, styleId, fills, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlignHorizontal, textAlignVertical, textAutoResize, textDecoration, textCase, paragraphSpacing, paragraphIndent, effects }) => {
 			try {
 				const connector = await getDesktopConnector();
 				const lines: string[] = [];
@@ -606,7 +613,7 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 					}
 
 					// Text style properties
-					if (fontFamily || fontSize || lineHeight || letterSpacing) {
+					if (fontFamily || fontSize || lineHeight || letterSpacing || textAlignHorizontal || textAlignVertical || textAutoResize || textDecoration || textCase || paragraphSpacing !== undefined || paragraphIndent !== undefined) {
 						const family = fontFamily || "Inter";
 						const style_name = fontStyle || "Regular";
 						lines.push(`await figma.loadFontAsync({family:${JSON.stringify(family)},style:${JSON.stringify(style_name)}});`);
@@ -622,6 +629,13 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 						if (letterSpacing) {
 							lines.push(`style.letterSpacing = {value:${letterSpacing.value},unit:'${letterSpacing.unit || "PIXELS"}'};`);
 						}
+						if (textAlignHorizontal) lines.push(`style.textAlignHorizontal = '${textAlignHorizontal}';`);
+						if (textAlignVertical) lines.push(`style.textAlignVertical = '${textAlignVertical}';`);
+						if (textAutoResize) lines.push(`style.textAutoResize = '${textAutoResize}';`);
+						if (textDecoration) lines.push(`style.textDecoration = '${textDecoration}';`);
+						if (textCase) lines.push(`style.textCase = '${textCase}';`);
+						if (paragraphSpacing !== undefined) lines.push(`style.paragraphSpacing = ${paragraphSpacing};`);
+						if (paragraphIndent !== undefined) lines.push(`style.paragraphIndent = ${paragraphIndent};`);
 					}
 
 					// Effect style

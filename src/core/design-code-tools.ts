@@ -1446,9 +1446,7 @@ export function registerDesignCodeTools(
 	getFigmaAPI: () => Promise<FigmaAPI>,
 	getCurrentUrl: () => string | null,
 	variablesCache?: Map<string, { data: any; timestamp: number }>,
-	options?: { isRemoteMode?: boolean },
 ): void {
-	const isRemoteMode = options?.isRemoteMode ?? false;
 
 	// -----------------------------------------------------------------------
 	// Tool: figma_check_design_parity

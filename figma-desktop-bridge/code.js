@@ -4,7 +4,12 @@
 // Uses postMessage to communicate with UI, bypassing worker sandbox limitations
 // Puppeteer can access UI iframe's window context to retrieve data
 
-console.log('🌉 [Desktop Bridge] Plugin loaded and ready');
+// Set to true to enable verbose debug logging (🌉 [Desktop Bridge] messages).
+// When false, only console.error and console.warn are emitted, preventing the
+// self-amplification loop where plugin logs generate console capture traffic.
+var DEBUG = false;
+
+if (DEBUG) console.log('🌉 [Desktop Bridge] Plugin loaded and ready');
 
 // Show minimal UI - compact status indicator
 figma.showUI(__html__, { width: 220, height: 32, visible: true, themeColors: true });
@@ -25,8 +30,14 @@ figma.showUI(__html__, { width: 220, height: 32, visible: true, themeColors: tru
     if (val === null || val === undefined) return val;
     if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return val;
     try {
-      // Attempt JSON round-trip for objects/arrays (catches circular refs)
-      return JSON.parse(JSON.stringify(val));
+      // Single-pass stringify (skip the redundant JSON.parse — the UI side
+      // re-stringifies anyway). Cap at 10KB to prevent large objects from
+      // flooding the pipeline.
+      var str = JSON.stringify(val);
+      if (str.length > 10240) {
+        return '[truncated: ' + str.length + ' chars]';
+      }
+      return str;
     } catch (e) {
       return String(val);
     }
@@ -65,13 +76,13 @@ figma.showUI(__html__, { width: 220, height: 32, visible: true, themeColors: tru
 // Immediately fetch and send variables data to UI
 (async () => {
   try {
-    console.log('🌉 [Desktop Bridge] Fetching variables...');
+    if (DEBUG) console.log('🌉 [Desktop Bridge] Fetching variables...');
 
     // Get all local variables and collections
     const variables = await figma.variables.getLocalVariablesAsync();
     const collections = await figma.variables.getLocalVariableCollectionsAsync();
 
-    console.log(`🌉 [Desktop Bridge] Found ${variables.length} variables in ${collections.length} collections`);
+    if (DEBUG) console.log('🌉 [Desktop Bridge] Found ' + variables.length + ' variables in ' + collections.length + ' collections');
 
     // Format the data
     const variablesData = {
@@ -105,8 +116,7 @@ figma.showUI(__html__, { width: 220, height: 32, visible: true, themeColors: tru
       data: variablesData
     });
 
-    console.log('🌉 [Desktop Bridge] Variables data sent to UI successfully');
-    console.log('🌉 [Desktop Bridge] UI iframe now has variables data accessible via window.__figmaVariablesData');
+    if (DEBUG) console.log('🌉 [Desktop Bridge] Variables data sent to UI successfully');
 
   } catch (error) {
     console.error('🌉 [Desktop Bridge] Error fetching variables:', error);
@@ -194,7 +204,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   if (msg.type === 'EXECUTE_CODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Executing code, length:', msg.code.length);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Executing code, length:', msg.code.length);
 
       // Use eval with async IIFE wrapper instead of AsyncFunction constructor
       // AsyncFunction is restricted in Figma's plugin sandbox, but eval works
@@ -204,7 +214,7 @@ figma.ui.onmessage = async (msg) => {
       // This allows async/await in user code while using eval
       var wrappedCode = "(async function() {\n" + msg.code + "\n})()";
 
-      console.log('🌉 [Desktop Bridge] Wrapped code for eval');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Wrapped code for eval');
 
       // Execute with timeout
       var timeoutMs = msg.timeout || 5000;
@@ -236,7 +246,7 @@ figma.ui.onmessage = async (msg) => {
         timeoutPromise
       ]);
 
-      console.log('🌉 [Desktop Bridge] Code executed successfully, result type:', typeof result);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Code executed successfully, result type:', typeof result);
 
       // Analyze result for potential silent failures
       var resultAnalysis = {
@@ -312,7 +322,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'UPDATE_VARIABLE') {
     try {
-      console.log('🌉 [Desktop Bridge] Updating variable:', msg.variableId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Updating variable:', msg.variableId);
 
       var variable = await figma.variables.getVariableByIdAsync(msg.variableId);
       if (!variable) {
@@ -329,7 +339,7 @@ figma.ui.onmessage = async (msg) => {
           type: 'VARIABLE_ALIAS',
           id: value
         };
-        console.log('🌉 [Desktop Bridge] Converting to variable alias:', value.id);
+        if (DEBUG) console.log('🌉 [Desktop Bridge] Converting to variable alias:', value.id);
       } else if (variable.resolvedType === 'COLOR' && typeof value === 'string') {
         // Convert hex string to Figma color
         value = hexToFigmaRGB(value);
@@ -338,7 +348,7 @@ figma.ui.onmessage = async (msg) => {
       // Set the value for the specified mode
       variable.setValueForMode(msg.modeId, value);
 
-      console.log('🌉 [Desktop Bridge] Variable updated successfully');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Variable updated successfully');
 
       figma.ui.postMessage({
         type: 'UPDATE_VARIABLE_RESULT',
@@ -363,7 +373,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'CREATE_VARIABLE') {
     try {
-      console.log('🌉 [Desktop Bridge] Creating variable:', msg.name);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Creating variable:', msg.name);
 
       // Get the collection
       var collection = await figma.variables.getVariableCollectionByIdAsync(msg.collectionId);
@@ -396,7 +406,7 @@ figma.ui.onmessage = async (msg) => {
         variable.scopes = msg.scopes;
       }
 
-      console.log('🌉 [Desktop Bridge] Variable created:', variable.id);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Variable created:', variable.id);
 
       figma.ui.postMessage({
         type: 'CREATE_VARIABLE_RESULT',
@@ -421,7 +431,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'CREATE_VARIABLE_COLLECTION') {
     try {
-      console.log('🌉 [Desktop Bridge] Creating collection:', msg.name);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Creating collection:', msg.name);
 
       // Create the collection
       var collection = figma.variables.createVariableCollection(msg.name);
@@ -438,7 +448,7 @@ figma.ui.onmessage = async (msg) => {
         }
       }
 
-      console.log('🌉 [Desktop Bridge] Collection created:', collection.id);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Collection created:', collection.id);
 
       figma.ui.postMessage({
         type: 'CREATE_VARIABLE_COLLECTION_RESULT',
@@ -463,7 +473,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'DELETE_VARIABLE') {
     try {
-      console.log('🌉 [Desktop Bridge] Deleting variable:', msg.variableId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Deleting variable:', msg.variableId);
 
       var variable = await figma.variables.getVariableByIdAsync(msg.variableId);
       if (!variable) {
@@ -477,7 +487,7 @@ figma.ui.onmessage = async (msg) => {
 
       variable.remove();
 
-      console.log('🌉 [Desktop Bridge] Variable deleted');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Variable deleted');
 
       figma.ui.postMessage({
         type: 'DELETE_VARIABLE_RESULT',
@@ -502,7 +512,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'DELETE_VARIABLE_COLLECTION') {
     try {
-      console.log('🌉 [Desktop Bridge] Deleting collection:', msg.collectionId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Deleting collection:', msg.collectionId);
 
       var collection = await figma.variables.getVariableCollectionByIdAsync(msg.collectionId);
       if (!collection) {
@@ -517,7 +527,7 @@ figma.ui.onmessage = async (msg) => {
 
       collection.remove();
 
-      console.log('🌉 [Desktop Bridge] Collection deleted');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Collection deleted');
 
       figma.ui.postMessage({
         type: 'DELETE_VARIABLE_COLLECTION_RESULT',
@@ -542,7 +552,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'RENAME_VARIABLE') {
     try {
-      console.log('🌉 [Desktop Bridge] Renaming variable:', msg.variableId, 'to', msg.newName);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Renaming variable:', msg.variableId, 'to', msg.newName);
 
       var variable = await figma.variables.getVariableByIdAsync(msg.variableId);
       if (!variable) {
@@ -552,7 +562,7 @@ figma.ui.onmessage = async (msg) => {
       var oldName = variable.name;
       variable.name = msg.newName;
 
-      console.log('🌉 [Desktop Bridge] Variable renamed from "' + oldName + '" to "' + msg.newName + '"');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Variable renamed from "' + oldName + '" to "' + msg.newName + '"');
 
       var serializedVar = serializeVariable(variable);
       serializedVar.oldName = oldName;
@@ -580,7 +590,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_VARIABLE_DESCRIPTION') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting description on variable:', msg.variableId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting description on variable:', msg.variableId);
 
       var variable = await figma.variables.getVariableByIdAsync(msg.variableId);
       if (!variable) {
@@ -589,7 +599,7 @@ figma.ui.onmessage = async (msg) => {
 
       variable.description = msg.description || '';
 
-      console.log('🌉 [Desktop Bridge] Variable description set successfully');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Variable description set successfully');
 
       figma.ui.postMessage({
         type: 'SET_VARIABLE_DESCRIPTION_RESULT',
@@ -615,7 +625,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'ADD_MODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Adding mode to collection:', msg.collectionId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Adding mode to collection:', msg.collectionId);
 
       var collection = await figma.variables.getVariableCollectionByIdAsync(msg.collectionId);
       if (!collection) {
@@ -625,7 +635,7 @@ figma.ui.onmessage = async (msg) => {
       // Add the mode (returns the new mode ID)
       var newModeId = collection.addMode(msg.modeName);
 
-      console.log('🌉 [Desktop Bridge] Mode "' + msg.modeName + '" added with ID:', newModeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Mode "' + msg.modeName + '" added with ID:', newModeId);
 
       figma.ui.postMessage({
         type: 'ADD_MODE_RESULT',
@@ -654,7 +664,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'RENAME_MODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Renaming mode:', msg.modeId, 'in collection:', msg.collectionId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Renaming mode:', msg.modeId, 'in collection:', msg.collectionId);
 
       var collection = await figma.variables.getVariableCollectionByIdAsync(msg.collectionId);
       if (!collection) {
@@ -670,7 +680,7 @@ figma.ui.onmessage = async (msg) => {
       var oldName = currentMode.name;
       collection.renameMode(msg.modeId, msg.newName);
 
-      console.log('🌉 [Desktop Bridge] Mode renamed from "' + oldName + '" to "' + msg.newName + '"');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Mode renamed from "' + oldName + '" to "' + msg.newName + '"');
 
       var serializedCol = serializeCollection(collection);
       serializedCol.oldName = oldName;
@@ -698,7 +708,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'REFRESH_VARIABLES') {
     try {
-      console.log('🌉 [Desktop Bridge] Refreshing variables data...');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Refreshing variables data...');
 
       var variables = await figma.variables.getLocalVariablesAsync();
       var collections = await figma.variables.getLocalVariableCollectionsAsync();
@@ -725,7 +735,7 @@ figma.ui.onmessage = async (msg) => {
         data: variablesData
       });
 
-      console.log('🌉 [Desktop Bridge] Variables refreshed:', variables.length, 'variables in', collections.length, 'collections');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Variables refreshed:', variables.length, 'variables in', collections.length, 'collections');
 
     } catch (error) {
       console.error('🌉 [Desktop Bridge] Refresh variables error:', error);
@@ -743,7 +753,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'GET_COMPONENT') {
     try {
-      console.log(`🌉 [Desktop Bridge] Fetching component: ${msg.nodeId}`);
+      if (DEBUG) console.log(`🌉 [Desktop Bridge] Fetching component: ${msg.nodeId}`);
 
       const node = await figma.getNodeByIdAsync(msg.nodeId);
 
@@ -790,7 +800,7 @@ figma.ui.onmessage = async (msg) => {
         }
       };
 
-      console.log(`🌉 [Desktop Bridge] Component data ready. Has description: ${!!componentData.component.description}, annotations: ${componentData.component.annotations.length}`);
+      if (DEBUG) console.log(`🌉 [Desktop Bridge] Component data ready. Has description: ${!!componentData.component.description}, annotations: ${componentData.component.annotations.length}`);
 
       // Send to UI
       figma.ui.postMessage({
@@ -814,7 +824,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'GET_LOCAL_COMPONENTS') {
     try {
-      console.log('🌉 [Desktop Bridge] Fetching all local components for manifest...');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Fetching all local components for manifest...');
 
       // Find all component sets and standalone components in the file
       var components = [];
@@ -945,9 +955,9 @@ figma.ui.onmessage = async (msg) => {
         }
       }
 
-      // Load all pages first (required before accessing children)
-      console.log('🌉 [Desktop Bridge] Loading all pages...');
-      await figma.loadAllPagesAsync();
+      // Pages are already loaded at startup (loadAllPagesAsync at bottom of file
+      // is required for documentAccess: "dynamic-page" before event listeners).
+      // No redundant call needed here.
 
       // Process pages in batches with event loop yields to prevent UI freeze
       // This is critical for large design systems that could otherwise crash
@@ -955,7 +965,7 @@ figma.ui.onmessage = async (msg) => {
       var PAGE_BATCH_SIZE = 3;  // Process 3 pages at a time
       var totalPages = pages.length;
 
-      console.log('🌉 [Desktop Bridge] Processing ' + totalPages + ' pages in batches of ' + PAGE_BATCH_SIZE + '...');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Processing ' + totalPages + ' pages in batches of ' + PAGE_BATCH_SIZE + '...');
 
       for (var pageIndex = 0; pageIndex < totalPages; pageIndex += PAGE_BATCH_SIZE) {
         var batchEnd = Math.min(pageIndex + PAGE_BATCH_SIZE, totalPages);
@@ -971,7 +981,7 @@ figma.ui.onmessage = async (msg) => {
 
         // Log progress for large files
         if (totalPages > PAGE_BATCH_SIZE) {
-          console.log('🌉 [Desktop Bridge] Processed pages ' + (pageIndex + 1) + '-' + batchEnd + ' of ' + totalPages + ' (found ' + components.length + ' components so far)');
+          if (DEBUG) console.log('🌉 [Desktop Bridge] Processed pages ' + (pageIndex + 1) + '-' + batchEnd + ' of ' + totalPages + ' (found ' + components.length + ' components so far)');
         }
 
         // Yield to event loop between batches to prevent UI freeze and allow cancellation
@@ -980,7 +990,7 @@ figma.ui.onmessage = async (msg) => {
         }
       }
 
-      console.log('🌉 [Desktop Bridge] Found ' + components.length + ' components and ' + componentSets.length + ' component sets');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Found ' + components.length + ' components and ' + componentSets.length + ' component sets');
 
       figma.ui.postMessage({
         type: 'GET_LOCAL_COMPONENTS_RESULT',
@@ -1015,7 +1025,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'INSTANTIATE_COMPONENT') {
     try {
-      console.log('🌉 [Desktop Bridge] Instantiating component:', msg.componentKey || msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Instantiating component:', msg.componentKey || msg.nodeId);
 
       var component = null;
       var instance = null;
@@ -1025,7 +1035,7 @@ figma.ui.onmessage = async (msg) => {
         try {
           component = await figma.importComponentByKeyAsync(msg.componentKey);
         } catch (importError) {
-          console.log('🌉 [Desktop Bridge] Not a published component, trying local...');
+          if (DEBUG) console.log('🌉 [Desktop Bridge] Not a published component, trying local...');
         }
       }
 
@@ -1046,14 +1056,14 @@ figma.ui.onmessage = async (msg) => {
                 }
               }
               var targetVariantName = variantParts.join(', ');
-              console.log('🌉 [Desktop Bridge] Looking for variant:', targetVariantName);
+              if (DEBUG) console.log('🌉 [Desktop Bridge] Looking for variant:', targetVariantName);
 
               // Find matching variant
               for (var i = 0; i < node.children.length; i++) {
                 var child = node.children[i];
                 if (child.type === 'COMPONENT' && child.name === targetVariantName) {
                   component = child;
-                  console.log('🌉 [Desktop Bridge] Found exact variant match');
+                  if (DEBUG) console.log('🌉 [Desktop Bridge] Found exact variant match');
                   break;
                 }
               }
@@ -1075,7 +1085,7 @@ figma.ui.onmessage = async (msg) => {
                     }
                     if (matches) {
                       component = child;
-                      console.log('🌉 [Desktop Bridge] Found partial variant match:', child.name);
+                      if (DEBUG) console.log('🌉 [Desktop Bridge] Found partial variant match:', child.name);
                       break;
                     }
                   }
@@ -1086,7 +1096,7 @@ figma.ui.onmessage = async (msg) => {
             // Default to first variant if no match
             if (!component && node.children && node.children.length > 0) {
               component = node.children[0];
-              console.log('🌉 [Desktop Bridge] Using default variant:', component.name);
+              if (DEBUG) console.log('🌉 [Desktop Bridge] Using default variant:', component.name);
             }
           }
         }
@@ -1155,7 +1165,7 @@ figma.ui.onmessage = async (msg) => {
         }
       }
 
-      console.log('🌉 [Desktop Bridge] Component instantiated:', instance.id);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Component instantiated:', instance.id);
 
       figma.ui.postMessage({
         type: 'INSTANTIATE_COMPONENT_RESULT',
@@ -1188,7 +1198,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_NODE_DESCRIPTION') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting description on node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting description on node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1206,7 +1216,7 @@ figma.ui.onmessage = async (msg) => {
         node.descriptionMarkdown = msg.descriptionMarkdown;
       }
 
-      console.log('🌉 [Desktop Bridge] Description set successfully');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Description set successfully');
 
       figma.ui.postMessage({
         type: 'SET_NODE_DESCRIPTION_RESULT',
@@ -1232,7 +1242,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'ADD_COMPONENT_PROPERTY') {
     try {
-      console.log('🌉 [Desktop Bridge] Adding component property:', msg.propertyName, 'type:', msg.propertyType);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Adding component property:', msg.propertyName, 'type:', msg.propertyType);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1257,7 +1267,7 @@ figma.ui.onmessage = async (msg) => {
       // Use msg.propertyType (not msg.type which is the message type 'ADD_COMPONENT_PROPERTY')
       var propertyNameWithId = node.addComponentProperty(msg.propertyName, msg.propertyType, msg.defaultValue, options);
 
-      console.log('🌉 [Desktop Bridge] Property added:', propertyNameWithId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Property added:', propertyNameWithId);
 
       figma.ui.postMessage({
         type: 'ADD_COMPONENT_PROPERTY_RESULT',
@@ -1283,7 +1293,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'EDIT_COMPONENT_PROPERTY') {
     try {
-      console.log('🌉 [Desktop Bridge] Editing component property:', msg.propertyName);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Editing component property:', msg.propertyName);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1296,7 +1306,7 @@ figma.ui.onmessage = async (msg) => {
 
       var propertyNameWithId = node.editComponentProperty(msg.propertyName, msg.newValue);
 
-      console.log('🌉 [Desktop Bridge] Property edited:', propertyNameWithId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Property edited:', propertyNameWithId);
 
       figma.ui.postMessage({
         type: 'EDIT_COMPONENT_PROPERTY_RESULT',
@@ -1322,7 +1332,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'DELETE_COMPONENT_PROPERTY') {
     try {
-      console.log('🌉 [Desktop Bridge] Deleting component property:', msg.propertyName);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Deleting component property:', msg.propertyName);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1335,7 +1345,7 @@ figma.ui.onmessage = async (msg) => {
 
       node.deleteComponentProperty(msg.propertyName);
 
-      console.log('🌉 [Desktop Bridge] Property deleted');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Property deleted');
 
       figma.ui.postMessage({
         type: 'DELETE_COMPONENT_PROPERTY_RESULT',
@@ -1360,7 +1370,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'RESIZE_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Resizing node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Resizing node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1377,7 +1387,7 @@ figma.ui.onmessage = async (msg) => {
         node.resizeWithoutConstraints(msg.width, msg.height);
       }
 
-      console.log('🌉 [Desktop Bridge] Node resized to:', msg.width, 'x', msg.height);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Node resized to:', msg.width, 'x', msg.height);
 
       figma.ui.postMessage({
         type: 'RESIZE_NODE_RESULT',
@@ -1403,7 +1413,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'MOVE_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Moving node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Moving node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1417,7 +1427,7 @@ figma.ui.onmessage = async (msg) => {
       node.x = msg.x;
       node.y = msg.y;
 
-      console.log('🌉 [Desktop Bridge] Node moved to:', msg.x, ',', msg.y);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Node moved to:', msg.x, ',', msg.y);
 
       figma.ui.postMessage({
         type: 'MOVE_NODE_RESULT',
@@ -1443,7 +1453,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_NODE_FILLS') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting fills on node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting fills on node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1488,7 +1498,7 @@ figma.ui.onmessage = async (msg) => {
 
       node.fills = processedFills;
 
-      console.log('🌉 [Desktop Bridge] Fills set successfully');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Fills set successfully');
 
       figma.ui.postMessage({
         type: 'SET_NODE_FILLS_RESULT',
@@ -1514,7 +1524,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_NODE_STROKES') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting strokes on node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting strokes on node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1544,7 +1554,7 @@ figma.ui.onmessage = async (msg) => {
         node.strokeWeight = msg.strokeWeight;
       }
 
-      console.log('🌉 [Desktop Bridge] Strokes set successfully');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Strokes set successfully');
 
       figma.ui.postMessage({
         type: 'SET_NODE_STROKES_RESULT',
@@ -1570,7 +1580,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_NODE_OPACITY') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting opacity on node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting opacity on node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1583,7 +1593,7 @@ figma.ui.onmessage = async (msg) => {
 
       node.opacity = Math.max(0, Math.min(1, msg.opacity));
 
-      console.log('🌉 [Desktop Bridge] Opacity set to:', node.opacity);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Opacity set to:', node.opacity);
 
       figma.ui.postMessage({
         type: 'SET_NODE_OPACITY_RESULT',
@@ -1609,7 +1619,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_NODE_CORNER_RADIUS') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting corner radius on node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting corner radius on node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1622,7 +1632,7 @@ figma.ui.onmessage = async (msg) => {
 
       node.cornerRadius = msg.radius;
 
-      console.log('🌉 [Desktop Bridge] Corner radius set to:', msg.radius);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Corner radius set to:', msg.radius);
 
       figma.ui.postMessage({
         type: 'SET_NODE_CORNER_RADIUS_RESULT',
@@ -1648,7 +1658,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'CLONE_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Cloning node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Cloning node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1661,7 +1671,7 @@ figma.ui.onmessage = async (msg) => {
 
       var clonedNode = node.clone();
 
-      console.log('🌉 [Desktop Bridge] Node cloned:', clonedNode.id);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Node cloned:', clonedNode.id);
 
       figma.ui.postMessage({
         type: 'CLONE_NODE_RESULT',
@@ -1687,7 +1697,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'DELETE_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Deleting node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Deleting node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1698,7 +1708,7 @@ figma.ui.onmessage = async (msg) => {
 
       node.remove();
 
-      console.log('🌉 [Desktop Bridge] Node deleted');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Node deleted');
 
       figma.ui.postMessage({
         type: 'DELETE_NODE_RESULT',
@@ -1724,7 +1734,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'RENAME_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Renaming node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Renaming node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1734,7 +1744,7 @@ figma.ui.onmessage = async (msg) => {
       var oldName = node.name;
       node.name = msg.newName;
 
-      console.log('🌉 [Desktop Bridge] Node renamed from "' + oldName + '" to "' + msg.newName + '"');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Node renamed from "' + oldName + '" to "' + msg.newName + '"');
 
       figma.ui.postMessage({
         type: 'RENAME_NODE_RESULT',
@@ -1760,7 +1770,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'REPARENT_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Reparenting node:', msg.nodeId, 'to parent:', msg.newParentId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Reparenting node:', msg.nodeId, 'to parent:', msg.newParentId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) throw new Error('Node not found: ' + msg.nodeId);
@@ -1802,7 +1812,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'REORDER_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Reordering node:', msg.nodeId, 'to index:', msg.index);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Reordering node:', msg.nodeId, 'to index:', msg.index);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) throw new Error('Node not found: ' + msg.nodeId);
@@ -1837,7 +1847,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_TEXT_CONTENT') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting text content on node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting text content on node:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -1913,7 +1923,7 @@ figma.ui.onmessage = async (msg) => {
         node.textCase = msg.textCase;
       }
 
-      console.log('🌉 [Desktop Bridge] Text content set');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Text content set');
 
       figma.ui.postMessage({
         type: 'SET_TEXT_CONTENT_RESULT',
@@ -1947,7 +1957,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'CREATE_CHILD_NODE') {
     try {
-      console.log('🌉 [Desktop Bridge] Creating child node of type:', msg.nodeType);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Creating child node of type:', msg.nodeType);
 
       var parent = await figma.getNodeByIdAsync(msg.parentId);
       if (!parent) {
@@ -2023,7 +2033,7 @@ figma.ui.onmessage = async (msg) => {
       // Add to parent
       parent.appendChild(newNode);
 
-      console.log('🌉 [Desktop Bridge] Child node created:', newNode.id);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Child node created:', newNode.id);
 
       figma.ui.postMessage({
         type: 'CREATE_CHILD_NODE_RESULT',
@@ -2058,7 +2068,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'CAPTURE_SCREENSHOT') {
     try {
-      console.log('🌉 [Desktop Bridge] Capturing screenshot for node:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Capturing screenshot for node:', msg.nodeId);
 
       var node = msg.nodeId ? await figma.getNodeByIdAsync(msg.nodeId) : figma.currentPage;
       if (!node) {
@@ -2091,7 +2101,7 @@ figma.ui.onmessage = async (msg) => {
         bounds = node.absoluteBoundingBox;
       }
 
-      console.log('🌉 [Desktop Bridge] Screenshot captured:', bytes.length, 'bytes');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Screenshot captured:', bytes.length, 'bytes');
 
       figma.ui.postMessage({
         type: 'CAPTURE_SCREENSHOT_RESULT',
@@ -2156,7 +2166,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'RELOAD_UI') {
     try {
-      console.log('🌉 [Desktop Bridge] Reloading plugin UI');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Reloading plugin UI');
       figma.ui.postMessage({
         type: 'RELOAD_UI_RESULT',
         requestId: msg.requestId,
@@ -2190,7 +2200,7 @@ figma.ui.onmessage = async (msg) => {
   // ============================================================================
   else if (msg.type === 'SET_INSTANCE_PROPERTIES') {
     try {
-      console.log('🌉 [Desktop Bridge] Setting instance properties on:', msg.nodeId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Setting instance properties on:', msg.nodeId);
 
       var node = await figma.getNodeByIdAsync(msg.nodeId);
       if (!node) {
@@ -2206,7 +2216,7 @@ figma.ui.onmessage = async (msg) => {
 
       // Get current properties for reference
       var currentProps = node.componentProperties;
-      console.log('🌉 [Desktop Bridge] Current properties:', JSON.stringify(Object.keys(currentProps)));
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Current properties:', JSON.stringify(Object.keys(currentProps)));
 
       // Build the properties object
       // Note: TEXT, BOOLEAN, INSTANCE_SWAP properties use the format "PropertyName#nodeId"
@@ -2220,7 +2230,7 @@ figma.ui.onmessage = async (msg) => {
         // Check if this exact property name exists
         if (currentProps[propName] !== undefined) {
           propsToSet[propName] = newValue;
-          console.log('🌉 [Desktop Bridge] Setting property:', propName, '=', newValue);
+          if (DEBUG) console.log('🌉 [Desktop Bridge] Setting property:', propName, '=', newValue);
         } else {
           // Try to find a matching property with a suffix (for TEXT/BOOLEAN/INSTANCE_SWAP)
           var foundMatch = false;
@@ -2228,7 +2238,7 @@ figma.ui.onmessage = async (msg) => {
             // Check if this is the base property name with a node ID suffix
             if (existingProp.startsWith(propName + '#')) {
               propsToSet[existingProp] = newValue;
-              console.log('🌉 [Desktop Bridge] Found suffixed property:', existingProp, '=', newValue);
+              if (DEBUG) console.log('🌉 [Desktop Bridge] Found suffixed property:', existingProp, '=', newValue);
               foundMatch = true;
               break;
             }
@@ -2250,7 +2260,7 @@ figma.ui.onmessage = async (msg) => {
       // Get updated properties
       var updatedProps = node.componentProperties;
 
-      console.log('🌉 [Desktop Bridge] Instance properties updated');
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Instance properties updated');
 
       figma.ui.postMessage({
         type: 'SET_INSTANCE_PROPERTIES_RESULT',
@@ -2288,6 +2298,8 @@ figma.ui.onmessage = async (msg) => {
 // DOCUMENT CHANGE LISTENER - Forward change events for cache invalidation
 // Fires when variables, styles, or nodes change (by any means — user edits, API, etc.)
 // Requires figma.loadAllPagesAsync() in dynamic-page mode before registering.
+// This MUST be called before figma.on('documentchange', ...) — the Figma Plugin API
+// mandates loading all pages for dynamic-page access to receive cross-page events.
 // ============================================================================
 figma.loadAllPagesAsync().then(function() {
   figma.on('documentchange', function(event) {
@@ -2357,13 +2369,13 @@ figma.loadAllPagesAsync().then(function() {
     });
   });
 
-  console.log('🌉 [Desktop Bridge] Document change, selection, and page listeners registered');
+  if (DEBUG) console.log('🌉 [Desktop Bridge] Document change, selection, and page listeners registered');
 }).catch(function(err) {
   console.warn('🌉 [Desktop Bridge] Could not register event listeners:', err);
 });
 
-console.log('🌉 [Desktop Bridge] Ready to handle component requests');
-console.log('🌉 [Desktop Bridge] Plugin will stay open until manually closed');
+if (DEBUG) console.log('🌉 [Desktop Bridge] Ready to handle component requests');
+if (DEBUG) console.log('🌉 [Desktop Bridge] Plugin will stay open until manually closed');
 
 // Plugin stays open - no auto-close
 // UI iframe remains accessible for Puppeteer to read data from window object

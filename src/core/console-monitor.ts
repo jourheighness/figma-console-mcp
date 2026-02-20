@@ -4,8 +4,6 @@
  * Monitors both main page console AND Web Worker consoles (where Figma plugins run)
  */
 
-// Use type imports to support both puppeteer-core and @cloudflare/puppeteer
-// Both have compatible Page/WebWorker interfaces for our use case
 import type { Page as PuppeteerPage, WebWorker as PuppeteerWorker } from 'puppeteer-core';
 import { createChildLogger } from './logger.js';
 import type { ConsoleLogEntry, ConsoleConfig } from './types/index.js';
@@ -25,7 +23,7 @@ export class ConsoleMonitor {
 	private logs: ConsoleLogEntry[] = [];
 	private config: ConsoleConfig;
 	private isMonitoring = false;
-	private page: any = null; // Supports both puppeteer-core and @cloudflare/puppeteer
+	private page: any = null;
 	private workers: Set<WebWorker> = new Set();
 	private lastUrl: string = ''; // Track the last URL to detect real navigations vs hash changes
 
@@ -35,7 +33,6 @@ export class ConsoleMonitor {
 
 	/**
 	 * Start monitoring console logs on a page
-	 * Accepts any puppeteer Page type (puppeteer-core or @cloudflare/puppeteer)
 	 */
 	async startMonitoring(page: any): Promise<void> {
 		if (this.isMonitoring && this.page === page) {

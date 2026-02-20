@@ -7,7 +7,7 @@ description: "Complete API reference for all 56+ MCP tools in Local Mode, includ
 
 This guide provides detailed documentation for each tool, including when to use them and best practices.
 
-> **Note:** Local Mode (NPX/Git) provides **56+ tools** with full read/write capabilities. Remote Mode (SSE) provides **21 read-only tools** (including design-code parity tools). Tools marked "Local" in the table below are not available in Remote Mode.
+> **Note:** Figma Console MCP provides **56+ tools** with full read/write capabilities. Tools marked "Local" in the table below require the Desktop Bridge plugin running in Figma.
 
 ## Quick Reference
 
@@ -1370,10 +1370,9 @@ figma_component_property({
 ### Prerequisites Checklist
 
 Before using write tools, ensure:
-1. ✅ Running in **Local Mode** (not Remote SSE)
-2. ✅ Connected to Figma Desktop via **Desktop Bridge Plugin** (recommended) or CDP debug mode (alternative)
-3. ✅ **Desktop Bridge plugin** is running in your Figma file
-4. ✅ `figma_get_status` returns `setup.valid: true`
+1. ✅ Connected to Figma Desktop via **Desktop Bridge Plugin** (recommended) or CDP debug mode (alternative)
+2. ✅ **Desktop Bridge plugin** is running in your Figma file
+3. ✅ `figma_get_status` returns `setup.valid: true`
 
 ---
 

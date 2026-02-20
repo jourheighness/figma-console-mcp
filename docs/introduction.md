@@ -166,12 +166,7 @@ Figma Console MCP makes this real. Your design system becomes:
 
 **First, decide what you want to do:**
 
-| I want to... | Setup | Time |
-|--------------|-------|------|
-| **Create and modify designs with AI** | NPX Setup (Recommended) | ~10 min |
-| **Just explore my design data** (read-only) | Remote SSE | ~2 min |
-
-### Recommended: NPX Setup (Full Capabilities)
+### Setup (Full Capabilities)
 
 Get all 56+ tools including design creation, variable management, and component instantiation.
 
@@ -189,23 +184,6 @@ Get all 56+ tools including design creation, variable management, and component 
     Restart your MCP client to load the new config
   </Step>
 </Steps>
-
-### Quick Start: Remote SSE (Read-Only)
-
-If you just want to explore or evaluate the tool, use Remote SSE. It's read-only (21 tools) but requires zero setup.
-
-<Steps>
-  <Step title="Open Claude Desktop Settings">
-    Claude menu → Settings → Connectors
-  </Step>
-  <Step title="Add Custom Connector">
-    Name: `Figma Console (Read-Only)` / URL: `https://figma-console-mcp.southleft.com/sse`
-  </Step>
-</Steps>
-
-<Warning>
-**Remote mode cannot create or modify designs.** It only has 21 read-only tools (~34% of full capabilities). For design creation, use NPX Setup.
-</Warning>
 
 <Card title="Full Setup Guide" icon="book-open" href="/setup">
   Detailed step-by-step instructions for all setup methods and AI clients.
@@ -263,29 +241,6 @@ Build a user profile card using the Avatar and Button components
 
 ---
 
-## Remote vs Local Mode
-
-Figma Console MCP offers two ways to connect with **very different capabilities**:
-
-| Feature | Local Mode (NPX/Git) | Remote Mode (SSE) |
-|---------|----------------------|-------------------|
-| **Total tools** | **56+** | **21** (read-only) |
-| **Setup** | ~10 minutes | ~2 minutes |
-| **Create designs** | ✅ Full capability | ❌ Not available |
-| **Edit designs** | ✅ Full capability | ❌ Not available |
-| **Manage variables** | ✅ Full capability | ❌ Not available |
-| **Read design data** | ✅ | ✅ |
-| **Variables API** | Works with any plan | Enterprise required |
-| **Authentication** | Manual token (one-time) | Automatic OAuth |
-
-**Start with NPX Setup** if you want AI to actually design in Figma. Remote mode is useful for quick exploration but is **read-only** with only ~34% of the tools.
-
-<Card title="Compare Modes in Detail" icon="code-compare" href="/mode-comparison">
-  Understand the technical differences and choose the right setup.
-</Card>
-
----
-
 ## Frequently Asked Questions
 
 <AccordionGroup>
@@ -294,7 +249,7 @@ Figma Console MCP offers two ways to connect with **very different capabilities*
   </Accordion>
 
   <Accordion title="Is my Figma data secure?">
-    Yes. Remote mode uses OAuth (the same secure login as "Sign in with Google"). Your credentials are never shared with the MCP server—only temporary access tokens. Local mode keeps everything on your machine.
+    Yes. Everything runs locally on your machine. Your Personal Access Token is stored in your MCP client config and only transmitted to Figma's API (`api.figma.com`). No data is sent to third parties.
   </Accordion>
 
   <Accordion title="Does this replace Figma's official Dev Mode MCP?">
@@ -306,7 +261,7 @@ Figma Console MCP offers two ways to connect with **very different capabilities*
   </Accordion>
 
   <Accordion title="Is this free?">
-    Yes! Figma Console MCP is open-source (MIT license). The hosted remote server is free to use. You can also self-host if you prefer.
+    Yes! Figma Console MCP is open-source (MIT license) and runs entirely on your machine.
   </Accordion>
 </AccordionGroup>
 
@@ -329,5 +284,5 @@ Figma Console MCP offers two ways to connect with **very different capabilities*
 ---
 
 <Note>
-**Open Source** — Figma Console MCP is MIT licensed. Contribute, customize, or self-host for enterprise requirements on [GitHub](https://github.com/southleft/figma-console-mcp).
+**Open Source** — Figma Console MCP is MIT licensed. Contribute or customize on [GitHub](https://github.com/southleft/figma-console-mcp).
 </Note>

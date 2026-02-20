@@ -16,12 +16,6 @@ Figma Console MCP is designed with security as a priority. The project is **full
 - All communication stays on the local machine
 - Figma API calls go directly from your machine to Figma's servers
 
-**Remote Mode (Cloudflare Workers)**
-- Uses SSE transport through Cloudflare Workers
-- OAuth tokens are handled server-side
-- Suitable for browser-based MCP clients
-- All traffic encrypted via HTTPS
-
 ### Data Handling
 
 | Aspect | Details |
@@ -40,11 +34,6 @@ Figma Console MCP uses **Figma's native authentication** mechanisms:
 - Stored locally in your MCP client config
 - Never transmitted except to Figma's API (`api.figma.com`)
 - Scoped permissions based on token configuration
-
-### OAuth (Remote Mode)
-- Uses Figma's official OAuth 2.0 flow
-- Tokens managed via Figma's authorization servers
-- No custom credential handling
 
 ## Code Execution (Design Manipulation Tools)
 
@@ -92,7 +81,6 @@ Figma Console MCP can access:
 All network communication is limited to:
 - `api.figma.com` - Figma's official REST API (HTTPS)
 - `localhost` - Local Desktop Bridge communication
-- `*.workers.dev` - Remote mode only (HTTPS)
 
 ### No External Dependencies at Runtime
 - No third-party analytics services
@@ -108,10 +96,9 @@ All network communication is limited to:
 
 ### Deployment Options
 For maximum security, enterprises can:
-1. Use **Local Mode exclusively** (no external network calls)
-2. Self-host the Cloudflare Worker (see [Self-Hosting Guide](https://docs.figma-console-mcp.southleft.com/self-hosting))
-3. Audit the complete source code on GitHub
-4. Run behind corporate firewalls with only `api.figma.com` allowlisted
+1. Use **Local Mode** (no external network calls beyond Figma API)
+2. Audit the complete source code on GitHub
+3. Run behind corporate firewalls with only `api.figma.com` allowlisted
 
 ### Access Control
 - Token permissions are controlled via Figma's account settings
@@ -132,7 +119,7 @@ If you discover a security vulnerability, please report it responsibly:
 - [x] Open source and auditable (MIT license)
 - [x] No data persistence or storage
 - [x] No telemetry or analytics
-- [x] Uses platform-native authentication (Figma OAuth/PATs)
+- [x] Uses platform-native authentication (Figma Personal Access Tokens)
 - [x] Code execution sandboxed in Figma plugin environment
 - [x] Local-only deployment option available
 - [x] All network traffic encrypted (HTTPS)

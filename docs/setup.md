@@ -17,22 +17,6 @@ Complete setup instructions for connecting Figma Console MCP to various AI clien
 |--------------|--------------|------|
 | **Create, modify, and develop with AI** | [NPX Setup](#-npx-setup-recommended) (Recommended) | ~10 min |
 | **Full capabilities with manual update control** | [Local Git Setup](#-local-git-setup-alternative) | ~15 min |
-| **Just explore my design data** (read-only) | [Remote SSE](#-remote-sse-read-only-exploration) | ~2 min |
-
-### ⚠️ Important: Capability Differences
-
-| Capability | NPX / Local Git | Remote SSE |
-|------------|-----------------|------------|
-| Read design data | ✅ | ✅ |
-| **Create components & frames** | ✅ | ❌ |
-| **Edit existing designs** | ✅ | ❌ |
-| **Manage design tokens/variables** | ✅ | ❌ |
-| Screenshot validation | ✅ | ✅ |
-| Desktop Bridge plugin | ✅ | ❌ |
-| Variables without Enterprise | ✅ | ❌ |
-| **Total tools available** | **56+** | **18** |
-
-> **Bottom line:** Remote SSE is **read-only** with ~34% of the tools. If you want AI to create, modify, or develop from your Figma designs, use NPX Setup.
 
 ---
 
@@ -255,68 +239,6 @@ Then restart Claude Desktop.
 
 ---
 
-## 📡 Remote SSE (Read-Only Exploration)
-
-**Best for:** Quickly evaluating the tool or read-only design data extraction.
-
-**What you get:** 21 read-only tools for viewing design data, taking screenshots, reading console logs, and design-code parity checks.
-
-> ⚠️ **Limitation:** Remote mode **cannot create or modify designs**. It's read-only. For design creation, use [NPX Setup](#-npx-setup-recommended).
-
-### Prerequisites
-
-- [ ] Claude Desktop installed
-- That's it! No Node.js, no tokens, no Figma restart required.
-
-### Method 1: UI-Based Setup (Claude Desktop)
-
-1. Open Claude Desktop → **Settings** → **Connectors**
-2. Click **"Add Custom Connector"**
-3. Enter:
-   - **Name:** `Figma Console (Read-Only)`
-   - **URL:** `https://figma-console-mcp.southleft.com/sse`
-4. Click **"Add"**
-5. Done! ✅
-
-OAuth authentication happens automatically when you first use design system tools.
-
-### Method 2: JSON Config
-
-Add to your Claude Desktop config:
-
-```json
-{
-  "mcpServers": {
-    "figma-console": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://figma-console-mcp.southleft.com/sse"]
-    }
-  }
-}
-```
-
-### What You Can Do (Read-Only)
-
-✅ View design data and file structure
-✅ Read design tokens/variables (Enterprise plan required)
-✅ Take screenshots
-✅ Read console logs
-✅ Get component metadata
-
-### What You Cannot Do
-
-❌ Create frames, shapes, or components
-❌ Edit existing designs
-❌ Create or modify variables
-❌ Instantiate components
-❌ Use Desktop Bridge plugin
-
-### Upgrading to Full Capabilities
-
-Ready for design creation? Follow the [NPX Setup](#-npx-setup-recommended) guide above.
-
----
-
 ## 🤖 GitHub Copilot (VS Code)
 
 GitHub Copilot supports MCP servers as of VS Code 1.102+.
@@ -336,11 +258,6 @@ echo "FIGMA_ACCESS_TOKEN=figd_YOUR_TOKEN_HERE" > ~/.figma-console-mcp.env
 
 # Add the server
 code --add-mcp '{"name":"figma-console","command":"npx","args":["-y","figma-console-mcp@latest"],"envFile":"~/.figma-console-mcp.env"}'
-```
-
-**Read-only mode:**
-```bash
-code --add-mcp '{"name":"figma-console","type":"sse","url":"https://figma-console-mcp.southleft.com/sse"}'
 ```
 
 ### Manual Configuration
@@ -434,27 +351,6 @@ If using **NVM** and having issues, try using the absolute path to Node:
 
 4. **Verify:** Visit http://localhost:9222 — should show inspectable pages
 
-### Claude Code OAuth Issues
-
-> **⚠️ Known Issue:** Claude Code's native `--transport sse` has a bug where OAuth completes but the connection fails. Use `mcp-remote` instead.
-
-**Don't use:**
-```bash
-# This has a known bug
-claude mcp add figma-console --transport sse https://figma-console-mcp.southleft.com/sse
-```
-
-**Use instead:**
-```bash
-# This works correctly
-claude mcp add figma-console -s user -- npx -y mcp-remote@latest https://figma-console-mcp.southleft.com/sse
-```
-
-Or better yet, use the NPX setup for full capabilities:
-```bash
-claude mcp add figma-console -s user -- npx -y figma-console-mcp@latest
-```
-
 ### Config File Syntax Errors
 
 If Claude Desktop doesn't see your MCP server:
@@ -471,7 +367,7 @@ If Claude Desktop doesn't see your MCP server:
 1. Check the [GitHub Issues](https://github.com/southleft/figma-console-mcp/issues)
 2. Ask in [Discussions](https://github.com/southleft/figma-console-mcp/discussions)
 3. Include:
-   - Your setup method (NPX, Local Git, or Remote)
+   - Your setup method (NPX or Local Git)
    - The exact error message
    - Output of `node --version`
    - Your MCP client (Claude Desktop, Claude Code, etc.)
@@ -501,4 +397,3 @@ If you set up before v1.10.0, add `"ENABLE_MCP_APPS": "true"` to the `env` secti
 - 📖 [Full Documentation](/)
 - 🐛 [Report Issues](https://github.com/southleft/figma-console-mcp/issues)
 - 💬 [Discussions](https://github.com/southleft/figma-console-mcp/discussions)
-- 📊 [Mode Comparison](mode-comparison)

@@ -271,23 +271,14 @@ export class FigmaWebSocketServer extends EventEmitter {
 
       // Capture console logs for the specific file
       if (message.type === 'CONSOLE_CAPTURE' && message.data) {
-        const found = this.findClientByWs(ws);
-        const data = message.data;
-        const entry: ConsoleLogEntry = {
-          timestamp: data.timestamp || Date.now(),
-          level: data.level || 'log',
-          message: typeof data.message === 'string' ? data.message.substring(0, 1000) : String(data.message),
-          args: Array.isArray(data.args) ? data.args.slice(0, 10) : [],
-          source: 'plugin',
-        };
-        if (found) {
-          found.client.consoleLogs.push(entry);
-          if (found.client.consoleLogs.length > this.consoleBufferSize) {
-            found.client.consoleLogs.shift();
-          }
-          found.client.lastActivity = Date.now();
+        this.handleConsoleEntry(message.data, ws);
+      }
+
+      // Batched console captures (multiple entries in one message, sent by ui.html)
+      if (message.type === 'CONSOLE_CAPTURE_BATCH' && Array.isArray(message.entries)) {
+        for (const entryData of message.entries) {
+          this.handleConsoleEntry(entryData, ws);
         }
-        this.emit('consoleLog', entry);
       }
 
       this.emit('pluginMessage', message);
@@ -295,6 +286,28 @@ export class FigmaWebSocketServer extends EventEmitter {
     }
 
     logger.debug({ message }, 'Unhandled WebSocket message');
+  }
+
+  /**
+   * Process a single console capture entry and buffer it for the source file.
+   */
+  private handleConsoleEntry(data: any, ws: WebSocket): void {
+    const found = this.findClientByWs(ws);
+    const entry: ConsoleLogEntry = {
+      timestamp: data.timestamp || Date.now(),
+      level: data.level || 'log',
+      message: typeof data.message === 'string' ? data.message.substring(0, 1000) : String(data.message),
+      args: Array.isArray(data.args) ? data.args.slice(0, 10) : [],
+      source: 'plugin',
+    };
+    if (found) {
+      found.client.consoleLogs.push(entry);
+      if (found.client.consoleLogs.length > this.consoleBufferSize) {
+        found.client.consoleLogs.shift();
+      }
+      found.client.lastActivity = Date.now();
+    }
+    this.emit('consoleLog', entry);
   }
 
   /**

@@ -11,23 +11,9 @@ export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
 /**
  * Create logger instance
- * Note: In Cloudflare Workers, console methods are automatically captured
  */
 export function createLogger(level: LogLevel = 'info'): pino.Logger {
-  // Check if running in Cloudflare Workers environment
-  const isWorkers = typeof (globalThis as any).caches !== 'undefined';
-
-  if (isWorkers) {
-    // Cloudflare Workers: use simple console-based logging
-    return pino({
-      level: process.env.LOG_LEVEL || level,
-      browser: {
-        asObject: true,
-      },
-    });
-  }
-
-  // Node.js environment: detect MCP stdio mode
+  // Detect MCP stdio mode
   // When stdout is not a TTY, we're likely in MCP stdio mode
   const isMCPStdio = !process.stdout.isTTY;
 
