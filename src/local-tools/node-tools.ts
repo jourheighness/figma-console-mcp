@@ -329,10 +329,19 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 					for (const binding of variableBindings) {
 						if (paintFields.includes(binding.field)) {
 							const idx = binding.paintIndex ?? 0;
+							const field = binding.field;
 							if (binding.variableId === "") {
-								codeLines.push(`node.setBoundVariable('${binding.field}', ${idx}, null);`);
+								// Unbind at paint level — fills/strokes require setBoundVariableForPaint, not node.setBoundVariable
+								codeLines.push(`var _paints = [...node.${field}];`);
+								codeLines.push(`_paints[${idx}] = figma.variables.setBoundVariableForPaint(_paints[${idx}], 'color', null);`);
+								codeLines.push(`node.${field} = _paints;`);
 							} else {
-								codeLines.push(`node.setBoundVariable('${binding.field}', ${idx}, await figma.variables.getVariableByIdAsync(${JSON.stringify(binding.variableId)}));`);
+								// Bind at paint level — clone paints array, bind on the paint, reassign
+								codeLines.push(`var _paints = [...node.${field}];`);
+								codeLines.push(`var _var = await figma.variables.getVariableByIdAsync(${JSON.stringify(binding.variableId)});`);
+								codeLines.push(`if (!_var) throw new Error('Variable not found: ${binding.variableId}');`);
+								codeLines.push(`_paints[${idx}] = figma.variables.setBoundVariableForPaint(_paints[${idx}], 'color', _var);`);
+								codeLines.push(`node.${field} = _paints;`);
 							}
 						} else {
 							if (binding.variableId === "") {
@@ -407,6 +416,14 @@ Common patterns:
 					lines.push(`return { success: true, remaining: reactions.length };`);
 				} else {
 					// add
+					if (destinationId) {
+						// Detect self-navigation: destination is the source node itself or an ancestor containing it
+						// Figma silently drops these reactions, so fail explicitly
+						lines.push(`var dest = await figma.getNodeByIdAsync(${JSON.stringify(destinationId)});`);
+						lines.push(`if (!dest) throw new Error('Destination node not found: ${destinationId}');`);
+						lines.push(`var ancestor = node.parent; while (ancestor) { if (ancestor.id === ${JSON.stringify(destinationId)}) throw new Error('Self-navigation: destination "' + dest.name + '" (' + dest.id + ') is an ancestor of the source node. Figma silently ignores this. Use a different destination frame.'); ancestor = ancestor.parent; }`);
+						lines.push(`if (node.id === ${JSON.stringify(destinationId)}) throw new Error('Self-navigation: source and destination are the same node. Use a different destination frame.');`);
+					}
 					lines.push(`var reactions = (node.reactions || []).slice();`);
 
 					// Build trigger object
