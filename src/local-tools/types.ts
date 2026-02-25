@@ -31,7 +31,7 @@ export interface LocalToolDeps {
 	sessionCache: SessionCache;
 	projectContextCache: ProjectContextCache;
 	teamLibraryCache: TeamLibraryCache;
-	teamIds: string[];
+	designSystems: Map<string, string>;
 	// Connection state
 	getDesktopConnectorRaw: () => IFigmaConnector | null;
 	setDesktopConnector: (connector: IFigmaConnector | null) => void;

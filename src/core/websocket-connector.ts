@@ -277,6 +277,10 @@ export class WebSocketConnector implements IFigmaConnector {
     return this.wsServer.sendCommand('CREATE_CHILD_NODE', { parentId, nodeType, properties: properties || {} });
   }
 
+  async scaffoldTree(parentId: string, tree: { nodeType: string; properties?: any; children?: any[] }): Promise<any> {
+    return this.wsServer.sendCommand('SCAFFOLD_TREE', { parentId, tree }, 32000);
+  }
+
   // ============================================================================
   // Screenshot & instance properties
   // ============================================================================

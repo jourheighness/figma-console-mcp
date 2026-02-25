@@ -37,7 +37,7 @@ Figma Console MCP uses **Figma's native authentication** mechanisms:
 
 ## Code Execution (Design Manipulation Tools)
 
-The design manipulation tools (`figma_edit_node`, `figma_set_appearance`, `figma_create_child`, etc.) modify designs in Figma's plugin context. Security considerations:
+The design manipulation tools (`figma_edit_node`, `figma_set_appearance`, `figma_create_nodes`, etc.) modify designs in Figma's plugin context. Security considerations:
 
 ### Sandboxed Environment
 - Code runs in Figma's **plugin sandbox**, not your system

@@ -60,7 +60,7 @@ export function registerContextResources(
 	getCurrentUrl: () => string | null,
 	options?: {
 		teamLibraryCache?: TeamLibraryCache;
-		teamIds?: string[];
+		designSystems?: Map<string, string>;
 	},
 ): void {
 	// ── Static resource: figma://context/current ─────────────────────────
@@ -207,9 +207,9 @@ export function registerContextResources(
 	);
 
 	// ── Static resource: figma://context/library ────────────────────────
-	if (options?.teamLibraryCache && options?.teamIds?.length) {
+	if (options?.teamLibraryCache && options?.designSystems?.size) {
 		const teamLibraryCache = options.teamLibraryCache;
-		const teamIds = options.teamIds;
+		const designSystems = options.designSystems;
 
 		server.registerResource(
 			'figma-context-library',
@@ -221,19 +221,20 @@ export function registerContextResources(
 			async (_uri) => {
 				const summaries: any[] = [];
 
-				for (const teamId of teamIds) {
+				for (const [name, teamId] of designSystems) {
 					const summary = teamLibraryCache.getCompactSummary(teamId);
 					if (summary) {
-						summaries.push(summary);
+						summaries.push({ designSystem: name, ...summary });
 					} else {
 						// Try to build on-demand
 						try {
 							const api = await getFigmaAPI();
 							await teamLibraryCache.build(teamId, api);
 							const built = teamLibraryCache.getCompactSummary(teamId);
-							if (built) summaries.push(built);
+							if (built) summaries.push({ designSystem: name, ...built });
 						} catch (err) {
 							summaries.push({
+								designSystem: name,
 								teamId,
 								error: `Failed to load team library: ${err instanceof Error ? err.message : String(err)}`,
 							});
@@ -247,7 +248,7 @@ export function registerContextResources(
 							uri: 'figma://context/library',
 							mimeType: 'application/json',
 							text: JSON.stringify({
-								hint: 'No team library data available. Set FIGMA_TEAM_ID env var to your Figma team ID.',
+								hint: 'No team library data available. Set FIGMA_DESIGN_SYSTEMS env var, e.g. \'{"my-ds": "12345"}\'.',
 							}),
 						}],
 					};

@@ -44,13 +44,10 @@ This guide provides detailed documentation for each tool, including when to use 
 | | `figma_add_mode` | Add modes to collections | Local |
 | | `figma_rename_mode` | Rename modes | Local |
 | | `figma_batch_variables` | Batch create, update, or setup complete token systems (action: "create", "update", "setup") | Local |
-| **🔍 Design-Code Parity** | `figma_check_design_parity` | Compare Figma specs vs code implementation | All |
-| | `figma_generate_component_doc` | Generate component documentation from Figma + code | All |
-| **💬 Comments** | `figma_comments` | Get, post, or delete comments (action: "get", "post", "delete") | All |
 | **📐 Node Manipulation** | `figma_edit_node` | Resize, move, clone, delete, rename, reparent, reorder nodes | Local |
 | | `figma_set_text` | Set text content | Local |
 | | `figma_set_appearance` | Set fills, strokes, opacity, cornerRadius, effects, rotation, blendMode | Local |
-| | `figma_create_child` | Create child node | Local |
+| | `figma_create_nodes` | Create child node | Local |
 
 ---
 
@@ -1214,13 +1211,13 @@ figma_set_appearance({
 
 ---
 
-### `figma_create_child`
+### `figma_create_nodes`
 
 Create a child node inside a parent.
 
 **Usage:**
 ```javascript
-figma_create_child({
+figma_create_nodes({
   parentId: "123:456",
   type: "FRAME",
   name: "New Frame"
@@ -1335,7 +1332,7 @@ figma_component_property({
 |------|------|---------|
 | Resize, move, clone, delete nodes | `figma_edit_node` | Layout adjustments, duplication |
 | Set fills, strokes, effects, opacity | `figma_set_appearance` | Visual styling |
-| Create child nodes | `figma_create_child` | Building frames |
+| Create child nodes | `figma_create_nodes` | Building frames |
 | Set text content | `figma_set_text` | Labels, headings, paragraphs |
 | Arrange component variants | `figma_arrange_component_set` | Organize variant grids |
 | Manage pages | `figma_manage_page` | Create, rename, reorder pages |
@@ -1355,246 +1352,12 @@ figma_component_property({
 | Add themes (Light/Dark) | `figma_add_mode` |
 | Rename themes | `figma_rename_mode` |
 
-### For Design-Code Parity
-
-| Task | Tool |
-|------|------|
-| Compare Figma specs against code | `figma_check_design_parity` |
-| Generate component documentation | `figma_generate_component_doc` |
-| Audit component before sign-off | `figma_check_design_parity` |
-| Create design system reference docs | `figma_generate_component_doc` |
-| Notify designers of parity drift | `figma_comments` (action: "post") |
-| Review existing feedback threads | `figma_comments` (action: "get") |
-| Clean up resolved feedback | `figma_comments` (action: "delete") |
-
 ### Prerequisites Checklist
 
 Before using write tools, ensure:
 1. ✅ Connected to Figma Desktop via **Desktop Bridge Plugin** (recommended) or CDP debug mode (alternative)
 2. ✅ **Desktop Bridge plugin** is running in your Figma file
 3. ✅ `figma_get_status` returns `setup.valid: true`
-
----
-
-## 🔍 Design-Code Parity Tools
-
-### `figma_check_design_parity`
-
-Compare a Figma component's design specs against your code implementation. Produces a scored parity report with actionable fix items.
-
-**When to Use:**
-- Before sign-off on a component implementation
-- During design system audits to catch drift between design and code
-- To verify that code accurately reflects the design spec
-
-**Usage:**
-```javascript
-figma_check_design_parity({
-  fileUrl: 'https://figma.com/design/abc123',
-  nodeId: '695:313',
-  codeSpec: {
-    visual: {
-      backgroundColor: '#FFFFFF',
-      borderColor: '#E4E4E7',
-      borderRadius: 12,
-      opacity: 1
-    },
-    spacing: {
-      paddingTop: 24,
-      paddingRight: 24,
-      paddingBottom: 24,
-      paddingLeft: 24,
-      gap: 24
-    },
-    componentAPI: {
-      props: [
-        { name: 'className', type: 'string', required: false },
-        { name: 'children', type: 'ReactNode', required: false }
-      ]
-    },
-    metadata: {
-      name: 'Card',
-      filePath: 'src/components/card/card.tsx'
-    }
-  },
-  canonicalSource: 'design',
-  enrich: true
-})
-```
-
-**Parameters:**
-- `fileUrl` (optional): Figma file URL (uses current URL if omitted)
-- `nodeId` (required): Component node ID
-- `codeSpec` (required): Structured code-side data with sections:
-  - `visual`: backgroundColor, borderColor, borderRadius, opacity, shadow, etc.
-  - `spacing`: paddingTop/Right/Bottom/Left, gap, width, height, minWidth, maxWidth
-  - `typography`: fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, color
-  - `tokens`: usedTokens array, hardcodedValues array, tokenCoverage percentage
-  - `componentAPI`: props array (name, type, required, defaultValue, description)
-  - `accessibility`: role, ariaLabel, keyboardInteraction, focusManagement, contrastRatio
-  - `metadata`: name, filePath, version, status, tags, description
-- `canonicalSource` (optional): Which source is truth — `"design"` (default) or `"code"`
-- `enrich` (optional): Enable token/enrichment analysis (default: true)
-
-**Returns:**
-- `summary`: Total discrepancies, parity score (0-100), counts by severity (critical/major/minor/info), categories breakdown
-- `discrepancies`: Array of property mismatches with category, severity, design value, code value, and suggestion
-- `actionItems`: Structured fix instructions specifying which side to fix, which Figma tool or code change to apply
-- `designData`: Raw Figma data extracted from the component (fills, strokes, spacing, properties)
-- `codeData`: The codeSpec as provided
-- `ai_instruction`: Structured presentation guide for consistent report formatting
-
-**Parity Score:**
-`score = max(0, 100 - (critical×15 + major×8 + minor×3 + info×1))`
-
-**COMPONENT_SET Handling:**
-When given a COMPONENT_SET node, the tool automatically resolves to the default variant (first child) for visual comparisons (fills, strokes, spacing, typography). Component property definitions and naming are read from the COMPONENT_SET itself.
-
----
-
-### `figma_generate_component_doc`
-
-Generate platform-agnostic markdown documentation for a component by merging Figma design data with code-side info. Output is compatible with Docusaurus, Mintlify, ZeroHeight, Knapsack, Supernova, and any markdown-based docs platform.
-
-**When to Use:**
-- Generating design system component documentation
-- Creating developer handoff documentation
-- Building a component reference library
-
-**Usage:**
-```javascript
-figma_generate_component_doc({
-  fileUrl: 'https://figma.com/design/abc123',
-  nodeId: '695:313',
-  codeInfo: {
-    importStatement: "import { Button } from '@mylib/ui'",
-    props: [
-      { name: 'variant', type: "'primary' | 'secondary' | 'ghost'", required: false, defaultValue: "'primary'", description: 'Visual style variant' },
-      { name: 'size', type: "'sm' | 'md' | 'lg'", required: false, defaultValue: "'md'", description: 'Button size' }
-    ],
-    events: [
-      { name: 'onClick', payload: 'React.MouseEvent<HTMLButtonElement>', description: 'Fires when clicked' }
-    ],
-    usageExamples: [
-      { title: 'Basic', code: '<Button>Click me</Button>' },
-      { title: 'Destructive', code: '<Button variant="destructive"><Trash2 /> Delete</Button>' }
-    ]
-  },
-  systemName: 'MyDesignSystem',
-  includeFrontmatter: true,
-  enrich: true
-})
-```
-
-**Parameters:**
-- `fileUrl` (optional): Figma file URL (uses current URL if omitted)
-- `nodeId` (required): Component node ID
-- `codeInfo` (optional): Code-side documentation info:
-  - `importStatement`: Import path
-  - `props`: Array of prop definitions (name, type, required, defaultValue, description)
-  - `events`: Array of event definitions
-  - `slots`: Array of slot/sub-component definitions
-  - `usageExamples`: Array of code examples (title + code)
-  - `changelog`: Version history entries
-- `sections` (optional): Toggle individual sections on/off (overview, statesAndVariants, visualSpecs, implementation, accessibility, changelog)
-- `outputPath` (optional): Suggested file path for saving
-- `systemName` (optional): Design system name for documentation headers
-- `enrich` (optional): Enable enrichment analysis (default: true)
-- `includeFrontmatter` (optional): Include YAML frontmatter metadata (default: true)
-
-**Returns:**
-- `componentName`: Resolved component name
-- `markdown`: Complete markdown documentation with frontmatter, overview, states & variants, visual specs, implementation, accessibility sections
-- `includedSections`: Which sections were generated
-- `dataSourceSummary`: What data sources were available (Figma enriched, code info, variables, styles)
-- `suggestedOutputPath`: Where to save the file
-- `ai_instruction`: Guidance for the AI on next steps (saving file, asking user for path)
-
-**COMPONENT_SET Handling:**
-Same as parity checker — resolves to default variant for visual specs, reads property definitions from the COMPONENT_SET.
-
----
-
-## 💬 Comment Tools
-
-### `figma_comments`
-
-Unified comment tool — get, post, or delete comments on a Figma file.
-
-**When to Use:**
-- Reviewing feedback threads on a design file
-- Checking for open comments before a release
-- Posting feedback pinned to specific components (e.g., after `figma_check_design_parity`)
-- Replying to existing comment threads
-- Cleaning up resolved or outdated comments
-
-**Usage (action: "get"):**
-```javascript
-figma_comments({
-  action: "get",
-  fileUrl: 'https://figma.com/design/abc123',
-  include_resolved: false,
-  as_md: true
-})
-```
-
-**Usage (action: "post"):**
-```javascript
-// Pin a comment to a specific node
-figma_comments({
-  action: "post",
-  fileUrl: 'https://figma.com/design/abc123',
-  message: 'Border-radius in code uses 8px but Figma shows 6px. Please update.',
-  node_id: '695:313'
-})
-
-// Reply to an existing comment thread
-figma_comments({
-  action: "post",
-  fileUrl: 'https://figma.com/design/abc123',
-  message: 'Fixed in the latest push.',
-  reply_to_comment_id: '1627922741'
-})
-```
-
-**Usage (action: "delete"):**
-```javascript
-figma_comments({
-  action: "delete",
-  fileUrl: 'https://figma.com/design/abc123',
-  comment_id: '1627922741'
-})
-```
-
-**Parameters:**
-- `action` (required): `"get"`, `"post"`, or `"delete"`
-- `fileUrl` (optional): Figma file URL (uses current URL if omitted)
-- For `"get"`:
-  - `as_md` (optional): Return comment message bodies as markdown (default: false)
-  - `include_resolved` (optional): Include resolved comment threads (default: false)
-- For `"post"`:
-  - `message` (required): The comment message text
-  - `node_id` (optional): Node ID to pin the comment to (e.g., `'695:313'`)
-  - `x` (optional): X offset for comment placement relative to the node
-  - `y` (optional): Y offset for comment placement relative to the node
-  - `reply_to_comment_id` (optional): ID of an existing comment to reply to
-- For `"delete"`:
-  - `comment_id` (required): The ID of the comment to delete (get IDs from `figma_comments` with action `"get"`)
-
-**Returns (get):**
-- `comments`: Array of comment objects with `id`, `message`, `user`, `created_at`, `resolved_at`, `client_meta` (pinned location)
-- `summary`: Total, active, resolved, and returned counts
-
-**Returns (post):**
-- `comment`: Created comment object with `id`, `message`, `created_at`, `user`, `client_meta`
-
-**Returns (delete):**
-- `success`: Boolean indicating deletion success
-- `deleted_comment_id`: The ID that was deleted
-
-<Warning>
-**@mentions are not supported via the API.** Including `@name` in the message renders as plain text, not a clickable Figma mention tag. Clickable @mentions with notifications are a Figma UI-only feature. To notify specific people, share the comment link or use Figma's built-in notification system.
-</Warning>
 
 ---
 

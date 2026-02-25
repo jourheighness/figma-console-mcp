@@ -209,3 +209,5 @@ Temporary Items
 # Internal notes and drafts
 .notes/
 TODO.md
+.serena/
+.grepai/

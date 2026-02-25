@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { coerceBool } from "../core/schema-coerce.js";
 import { extractFileKey } from "../core/figma-api.js";
 import { createChildLogger } from "../core/logger.js";
 import { discoverActiveInstances } from "../core/port-discovery.js";
@@ -15,12 +16,12 @@ export function registerConnectionTools(deps: LocalToolDeps): void {
 	const {
 		server, getFigmaAPI, getCurrentUrl, getDesktopConnector, ensureInitialized,
 		getBrowserManager, getConsoleMonitor, getWsServer, config,
-		variablesCache, sessionCache, projectContextCache, teamLibraryCache, teamIds,
+		variablesCache, sessionCache, projectContextCache, teamLibraryCache, designSystems,
 		getDesktopConnectorRaw, setDesktopConnector,
 		getWsActualPort, getWsPreferredPort, getWsStartupError, getPluginPath,
 	} = deps;
 
-	// Consolidated console tool: get, watch, clear
+	// Consolidated console tool: get, watch, clear (read-only)
 	server.tool(
 		"figma_console",
 		`Interact with Figma's console output. Works with both CDP and WebSocket transports.
@@ -34,7 +35,7 @@ Actions:
 				.enum(["get", "watch", "clear"])
 				.describe("'get' for past logs, 'watch' for real-time streaming, 'clear' to reset buffer"),
 			count: z
-				.number()
+				.coerce.number()
 				.optional()
 				.default(100)
 				.describe("Number of logs to retrieve (get only)"),
@@ -44,17 +45,18 @@ Actions:
 				.default("all")
 				.describe("Filter by log level (get/watch)"),
 			since: z
-				.number()
+				.coerce.number()
 				.optional()
 				.describe("Only logs after this Unix ms timestamp (get only)"),
 			duration: z
-				.number()
+				.coerce.number()
 				.optional()
 				.default(30)
 				.describe("Watch duration in seconds (watch only, max 300)"),
 		},
-		{ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		async ({ action, count, level, since, duration }) => {
+
 			if (action === "clear") {
 				try {
 					let clearedCount = 0;
@@ -256,10 +258,10 @@ Actions:
 			action: z.enum(["navigate", "status", "reconnect", "invalidate_cache", "reload", "list_files", "changes"]),
 			url: z.string().optional().describe("Figma URL to navigate to (required for navigate action)"),
 			fileUrl: z.string().optional().describe("Figma file URL (for invalidate_cache). Uses current file if omitted."),
-			clearConsole: z.boolean().optional().default(true).describe("Clear console before reload (for reload action)"),
-			since: z.number().optional().describe("Only changes after this Unix timestamp ms (for changes action)"),
-			count: z.number().optional().describe("Max change events to return (for changes action)"),
-			clear: z.boolean().optional().default(false).describe("Clear change buffer after reading (for changes action)"),
+			clearConsole: coerceBool().optional().default(true).describe("Clear console before reload (for reload action)"),
+			since: z.coerce.number().optional().describe("Only changes after this Unix timestamp ms (for changes action)"),
+			count: z.coerce.number().optional().describe("Max change events to return (for changes action)"),
+			clear: coerceBool().optional().default(false).describe("Clear change buffer after reading (for changes action)"),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ action, url, fileUrl, clearConsole, since, count, clear }) => {
@@ -939,11 +941,11 @@ Actions:
 
 				// Also invalidate team library caches (team libraries may reference this file)
 				const teamLibraryRebuilt: string[] = [];
-				if (teamIds.length > 0) {
-					for (const teamId of teamIds) {
+				if (designSystems.size > 0) {
+					for (const [name, teamId] of designSystems) {
 						await teamLibraryCache.invalidate(teamId);
 						teamLibraryCache.build(teamId, api).catch(() => {});
-						teamLibraryRebuilt.push(teamId);
+						teamLibraryRebuilt.push(name);
 					}
 				}
 
@@ -985,11 +987,10 @@ Actions:
 		"figma_get_selection",
 		"Get the currently selected nodes in Figma. Returns node IDs, names, types, and dimensions. WebSocket-only — requires Desktop Bridge plugin. Use this to understand what the user is pointing at instead of asking them to describe it.",
 		{
-			verbose: z
-				.boolean()
+			verbose: coerceBool()
 				.optional()
 				.default(false)
-				.describe("If true, fetches additional details (fills, strokes, styles) for each selected node via internal plugin execution"),
+				.describe("If true, includes fill colors, stroke colors, applied styles, and variable bindings for each selected node. Use when you need to inspect visual properties, not just structure."),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async ({ verbose }) => {

@@ -5,6 +5,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { jsonArray, coerceBool, jsonRecord } from "./schema-coerce.js";
 import type { FigmaAPI, FigmaUrlInfo } from "./figma-api.js";
 import { extractFileKey, extractFigmaUrlInfo, formatVariables, formatComponentData, withTimeout } from "./figma-api.js";
 import { createChildLogger } from "./logger.js";
@@ -859,13 +860,13 @@ export function registerFigmaAPITools(
 					"Figma file URL. Auto-detected from active connection."
 				),
 			depth: z
-				.number()
+				.coerce.number()
 				.min(0)
 				.max(5)
 				.optional()
 				.default(1)
 				.describe(
-					"How many levels of children to include (default: 1). General scope: max 3. Plugin scope: max 5 (safe due to aggressive filtering)."
+					"How many levels of children to include (default: 1). Full-file: max 3 (general) / 5 (plugin). When nodeIds specified: full depth allowed (payload bounded by node count)."
 				),
 			scope: z
 				.enum(["general", "plugin"])
@@ -881,12 +882,10 @@ export function registerFigmaAPITools(
 				.describe(
 					"Controls payload size: 'summary' (IDs/names/types only, ~90% smaller - RECOMMENDED), 'standard' (essential properties, ~50% smaller), 'full' (everything). Default: summary for token efficiency."
 				),
-			nodeIds: z
-				.array(z.string())
+			nodeIds: jsonArray(z.array(z.string()))
 				.optional()
 				.describe("Specific node IDs to retrieve (optional)"),
-			enrich: z
-				.boolean()
+			enrich: coerceBool()
 				.optional()
 				.describe(
 					"Set to true when user asks for: file statistics, health metrics, design system audit, or quality analysis. Adds statistics, health scores, and audit summaries. Default: false"
@@ -925,7 +924,11 @@ export function registerFigmaAPITools(
 					throw new Error(`Invalid Figma URL: ${url}`);
 				}
 
-				const effectiveDepth = scope === "plugin" ? depth : Math.min(depth, 3);
+				// When specific nodeIds are requested, allow full depth since payload is bounded.
+				// Full file requests use stricter limits to avoid huge payloads.
+				const effectiveDepth = (nodeIds && nodeIds.length > 0)
+					? depth
+					: scope === "plugin" ? depth : Math.min(depth, 3);
 				logger.info({ fileKey, depth: effectiveDepth, nodeIds, enrich, verbosity, scope }, "Fetching file data");
 
 				// When specific nodeIds are requested, use getNodes endpoint where depth
@@ -1260,19 +1263,13 @@ export function registerFigmaAPITools(
 	 * Tool 9: Get Variables (Design Tokens)
 	 *
 	 * WORKFLOW:
-	 * - Primary: Attempts to fetch variables via Figma REST API (requires Enterprise plan)
-	 * - Fallback: On 403 error, provides console-based extraction snippet
-	 *
-	 * TWO-CALL PATTERN (when API unavailable):
-	 * 1. First call: Returns snippet + instructions (useConsoleFallback: true, default)
-	 * 2. User runs snippet in Figma plugin console
-	 * 3. Second call: Parses captured data (parseFromConsole: true)
-	 *
-	 * IMPORTANT: Snippet requires Figma Plugin API context, not browser DevTools console.
+	 * - Primary: Desktop Bridge (works on all Figma plans)
+	 * - Fallback: REST API (requires Enterprise plan token)
+	 * - Last resort: Console-based extraction snippet
 	 */
 	server.tool(
 		"figma_get_variables",
-		"Extract design tokens and variables from a Figma file with code export support (CSS, Tailwind, TypeScript, Sass). Use when user asks for: design system tokens, variables, color/spacing values, theme data, or code exports. Handles multi-mode variables (Light/Dark themes). NOT for component metadata (use figma_get_component). Supports filtering by collection/mode/name and verbosity control to prevent token exhaustion. Enterprise plan required for Variables API; automatically falls back to Styles API or console-based extraction if unavailable.",
+		"Get design tokens and variables from the current Figma file. Returns collections, modes, and values. Use format='summary' for overview, format='filtered' with collection/namePattern/mode for specific tokens. Supports code exports (CSS, Tailwind, TypeScript, Sass) via enrich=true. Handles multi-mode variables (Light/Dark themes). NOT for component metadata (use figma_get_component).",
 		{
 			fileUrl: z
 				.string()
@@ -1281,8 +1278,7 @@ export function registerFigmaAPITools(
 				.describe(
 					"Figma file URL. Auto-detected from active connection."
 				),
-			includePublished: z
-				.boolean()
+			includePublished: coerceBool()
 				.optional()
 				.default(true)
 				.describe("Include published variables from libraries"),
@@ -1293,26 +1289,21 @@ export function registerFigmaAPITools(
 				.describe(
 					"Controls payload size: 'inventory' (names/IDs only, ~95% smaller, use with filtered), 'summary' (names/values only, ~80% smaller), 'standard' (essential properties, ~45% smaller), 'full' (everything). Default: summary"
 				),
-			enrich: z
-				.boolean()
+			enrich: coerceBool()
 				.optional()
 				.describe(
 					"Set to true when user asks for: CSS/Sass/Tailwind exports, code examples, design tokens, usage information, dependencies, or any export format. Adds resolved values, dependency graphs, and usage analysis. Default: false"
 				),
-			include_usage: z
-				.boolean()
+			include_usage: coerceBool()
 				.optional()
 				.describe("Include usage in styles and components (requires enrich=true)"),
-			include_dependencies: z
-				.boolean()
+			include_dependencies: coerceBool()
 				.optional()
 				.describe("Include variable dependency graph (requires enrich=true)"),
-			include_exports: z
-				.boolean()
+			include_exports: coerceBool()
 				.optional()
 				.describe("Include export format examples (requires enrich=true)"),
-				export_formats: z
-				.array(z.enum(["css", "sass", "tailwind", "typescript", "json"]))
+				export_formats: jsonArray(z.array(z.enum(["css", "sass", "tailwind", "typescript", "json"])))
 				.optional()
 				.describe("Which code formats to generate examples for. Use when user mentions specific formats like 'CSS', 'Tailwind', 'SCSS', 'TypeScript', etc. Automatically enables enrichment."),
 			format: z
@@ -1334,28 +1325,23 @@ export function registerFigmaAPITools(
 				.string()
 				.optional()
 				.describe("Filter variables by mode name or ID. Only returns variables that have values for this mode. Only applies when format='filtered'. Example: 'Light' or 'Dark'"),
-			returnAsLinks: z
-				.boolean()
+			returnAsLinks: coerceBool()
 				.optional()
 				.default(false)
 				.describe("Return variables as resource_link references instead of full data. Drastically reduces payload size (100+ variables = ~20KB vs >1MB). Use with figma_get_variable_by_id to fetch specific variables. Recommended for large variable sets. Default: false"),
-			refreshCache: z
-				.boolean()
+			refreshCache: coerceBool()
 				.optional()
 				.default(false)
 				.describe("Force refresh cache by fetching fresh data from Figma. Use when data may have changed since last fetch. Default: false (use cached data if available and fresh)"),
-			useConsoleFallback: z
-				.boolean()
+			useConsoleFallback: coerceBool()
 				.optional()
 				.default(true)
 				.describe(
-					"Enable automatic fallback to console-based extraction when REST API returns 403 (Figma Enterprise plan required). " +
-					"When enabled, provides a JavaScript snippet that users run in Figma's plugin console. " +
-					"This is STEP 1 of a two-call workflow. After receiving the snippet, instruct the user to run it, then call this tool again with parseFromConsole=true. " +
-					"Default: true. Set to false only to disable the fallback entirely."
+					"Enable console-based extraction as last-resort fallback when Desktop Bridge and REST API are both unavailable. " +
+					"When enabled, provides a JavaScript snippet for Figma's plugin console. " +
+					"Default: true. Set to false to disable."
 				),
-			parseFromConsole: z
-				.boolean()
+			parseFromConsole: coerceBool()
 				.optional()
 				.default(false)
 				.describe(
@@ -1367,22 +1353,21 @@ export function registerFigmaAPITools(
 					"Default: false. Never set to true on the first call."
 				),
 			page: z
-				.number()
+				.coerce.number()
 				.int()
 				.min(1)
 				.optional()
 				.default(1)
 				.describe("Page number for paginated results (1-based). Use when response is too large (>1MB). Each page returns up to 50 variables."),
 			pageSize: z
-				.number()
+				.coerce.number()
 				.int()
 				.min(1)
 				.max(100)
 				.optional()
 				.default(50)
 				.describe("Number of variables per page (1-100). Default: 50. Smaller values reduce response size."),
-			resolveAliases: z
-				.boolean()
+			resolveAliases: coerceBool()
 				.optional()
 				.default(false)
 				.describe(
@@ -1802,353 +1787,33 @@ export function registerFigmaAPITools(
 
 				// Check if REST API token is available (determines priority)
 				const hasToken = !!process.env.FIGMA_ACCESS_TOKEN;
-				let restApiSucceeded = false;
+				let desktopBridgeSucceeded = false;
 
 				// PRIORITY LOGIC:
-				// 1. If token exists → Try REST API FIRST (enterprise users)
-				// 2. If no token OR REST API fails → Try Desktop Bridge as fallback
+				// 1. Try Desktop Bridge FIRST (local connection, fastest)
+				// 2. If Desktop Bridge fails AND token exists → Try REST API as fallback
 				logger.info({ hasToken }, "Authentication method detection");
 
-				// Try REST API first if token is available
-				if (hasToken && !parseFromConsole) {
-					try {
-						logger.info({ fileKey, includePublished, verbosity, enrich }, "Fetching variables via REST API (priority: token detected)");
-						const api = await getFigmaAPI();
 
-						// Wrap API call with timeout to prevent indefinite hangs (30s timeout)
-						const { local, published, localError, publishedError } = await withTimeout(
-							api.getAllVariables(fileKey),
-							30000,
-							'Figma Variables API'
-						);
-
-						// If local variables failed (e.g., 403 without Enterprise), fall through to Desktop Bridge
-						if (localError) {
-							logger.warn({ error: localError, fileKey }, "REST API failed to get local variables, falling back to Desktop Bridge");
-							throw new Error(localError);
-						}
-
-						let localFormatted = formatVariables(local);
-						let publishedFormatted = includePublished
-							? formatVariables(published)
-							: null;
-
-						// DEBUG: Check if valuesByMode exists before filtering
-						if (localFormatted.variables[0]) {
-							logger.info(
-								{
-									hasValuesByMode: !!localFormatted.variables[0].valuesByMode,
-									variableKeys: Object.keys(localFormatted.variables[0]),
-									collectionCount: localFormatted.collections?.length,
-								},
-								'Variable structure before filtering'
-							);
-						}
-
-						// Apply collection/name/mode filtering if format is 'filtered'
-						if (format === 'filtered') {
-							// Create properly structured data for applyFilters
-							const dataToFilter = {
-								variables: localFormatted.variables,
-								variableCollections: localFormatted.collections,
-							};
-
-							const filteredLocal = applyFilters(
-								dataToFilter,
-								{ collection, namePattern, mode },
-								verbosity || "standard"
-							);
-
-							localFormatted = {
-								summary: localFormatted.summary,
-								collections: filteredLocal.variableCollections,
-								variables: filteredLocal.variables,
-							};
-
-							// Also filter published if included
-							if (includePublished && publishedFormatted) {
-								const dataToFilterPublished = {
-									variables: publishedFormatted.variables,
-									variableCollections: publishedFormatted.collections,
-								};
-
-								const filteredPublished = applyFilters(
-									dataToFilterPublished,
-									{ collection, namePattern, mode },
-									verbosity || "standard"
-								);
-
-								publishedFormatted = {
-									summary: publishedFormatted.summary,
-									collections: filteredPublished.variableCollections,
-									variables: filteredPublished.variables,
-								};
-							}
-						}
-
-						// Apply verbosity filtering after collection/name/mode filters
-						if (verbosity && verbosity !== 'full') {
-							const verbosityFiltered = applyFilters(
-								{
-									variables: localFormatted.variables,
-									variableCollections: localFormatted.collections,
-								},
-								{},
-								verbosity
-							);
-
-							localFormatted = {
-								...localFormatted,
-								collections: verbosityFiltered.variableCollections,
-								variables: verbosityFiltered.variables,
-							};
-
-							if (includePublished && publishedFormatted) {
-								const verbosityFilteredPublished = applyFilters(
-									{
-										variables: publishedFormatted.variables,
-										variableCollections: publishedFormatted.collections,
-									},
-									{},
-									verbosity
-								);
-
-								publishedFormatted = {
-									...publishedFormatted,
-									collections: verbosityFilteredPublished.variableCollections,
-									variables: verbosityFilteredPublished.variables,
-								};
-							}
-						}
-
-						// Apply pagination if requested
-						let paginationInfo;
-						if (pageSize) {
-							const startIdx = (page - 1) * pageSize;
-							const endIdx = startIdx + pageSize;
-							const totalVars = localFormatted.variables.length;
-
-							paginationInfo = {
-								page,
-								pageSize,
-								totalItems: totalVars,
-								totalPages: Math.ceil(totalVars / pageSize),
-								hasNextPage: endIdx < totalVars,
-								hasPrevPage: page > 1,
-							};
-
-							localFormatted.variables = localFormatted.variables.slice(startIdx, endIdx);
-
-							if (includePublished && publishedFormatted) {
-								publishedFormatted.variables = publishedFormatted.variables.slice(startIdx, endIdx);
-							}
-						}
-
-
-						// Cache the successful REST API response
-						const dataForCache = {
-							fileKey,
-							local: {
-								summary: localFormatted.summary,
-								collections: localFormatted.collections,
-								variables: localFormatted.variables,
-							},
-							...(includePublished &&
-								publishedFormatted && {
-									published: {
-										summary: publishedFormatted.summary,
-										collections: publishedFormatted.collections,
-										variables: publishedFormatted.variables,
-									},
-								}),
-							verbosity: verbosity || "standard",
-							enriched: enrich || false,
-							timestamp: Date.now(),
-							source: "rest_api",
-						};
-
-						if (variablesCache) {
-							variablesCache.set(fileKey, { data: dataForCache, timestamp: Date.now() });
-							logger.info({ fileKey }, "Cached REST API variables");
-						}
-
-						// Apply alias resolution if requested (REST API format has local.variables)
-						if (resolveAliases && localFormatted.variables?.length > 0) {
-							// Build maps from local variables and collections
-							const allVariablesMap = new Map<string, any>();
-							const collectionsMap = new Map<string, any>();
-
-							for (const v of localFormatted.variables || []) {
-								allVariablesMap.set(v.id, v);
-							}
-							for (const c of localFormatted.collections || []) {
-								collectionsMap.set(c.id, c);
-							}
-
-							// Also include published variables if available
-							if (publishedFormatted?.variables) {
-								for (const v of publishedFormatted.variables) {
-									allVariablesMap.set(v.id, v);
-								}
-							}
-							if (publishedFormatted?.collections) {
-								for (const c of publishedFormatted.collections) {
-									collectionsMap.set(c.id, c);
-								}
-							}
-
-							localFormatted.variables = resolveVariableAliases(
-								localFormatted.variables,
-								allVariablesMap,
-								collectionsMap
-							);
-
-							if (publishedFormatted?.variables) {
-								publishedFormatted.variables = resolveVariableAliases(
-									publishedFormatted.variables,
-									allVariablesMap,
-									collectionsMap
-								);
-							}
-
-							logger.info(
-								{ fileKey, resolvedCount: localFormatted.variables.length },
-								'Applied alias resolution to REST API variables'
-							);
-						}
-
-						// Handle resource_links format
-						if (returnAsLinks) {
-							const content: any[] = [
-								{
-									type: "text",
-									text: `Variables for file ${fileKey} (${localFormatted.variables.length} variables). Use figma_get_variable_by_id to fetch specific variables:\n\n`,
-								},
-							];
-
-							for (const variable of localFormatted.variables) {
-								content.push({
-									type: "resource",
-									resource: {
-										uri: `figma://variable/${fileKey}/${variable.id}`,
-										mimeType: "application/json",
-										text: `${variable.name} (${variable.resolvedType})`,
-									},
-								});
-							}
-
-							logger.info(
-								{
-									fileKey,
-									format: 'resource_links',
-									variableCount: localFormatted.variables.length,
-									linkCount: content.length - 1,
-								},
-								`Returning REST API variables as resource_links`
-							);
-
-							return { content };
-						}
-
-						// Build initial response data
-						const responseData = {
-							fileKey,
-							local: {
-								summary: localFormatted.summary,
-								collections: localFormatted.collections,
-								variables: localFormatted.variables,
-							},
-							...(includePublished &&
-								publishedFormatted && {
-									published: {
-										summary: publishedFormatted.summary,
-										collections: publishedFormatted.collections,
-										variables: publishedFormatted.variables,
-									},
-								}),
-							verbosity: verbosity || "standard",
-							enriched: enrich || false,
-							...(paginationInfo && { pagination: paginationInfo }),
-						};
-
-						// Mark REST API as successful
-						restApiSucceeded = true;
-						logger.info({ fileKey }, "REST API fetch successful, skipping Desktop Bridge");
-
-						// Use adaptive response to prevent context exhaustion
-						return adaptiveResponse(responseData, {
-							toolName: "figma_get_variables",
-							compressionCallback: (adjustedLevel: string) => {
-								// Re-apply filters with adjusted verbosity
-								const level = adjustedLevel as "inventory" | "summary" | "standard" | "full";
-								const refiltered = applyFilters(
-									{
-										variables: localFormatted.variables,
-										variableCollections: localFormatted.collections,
-									},
-									{ collection, namePattern, mode },
-									level
-								);
-
-								return {
-									...responseData,
-									local: {
-										...responseData.local,
-										variables: refiltered.variables,
-										collections: refiltered.variableCollections,
-									},
-									verbosity: level,
-								};
-							},
-							suggestedActions: [
-								"Use verbosity='inventory' or 'summary' for large variable sets",
-								"Apply filters: collection, namePattern, or mode parameters",
-								"Use pagination with pageSize parameter (default 50, max 100)",
-								"Use returnAsLinks=true to get resource_link references instead of full data",
-							],
-						});
-					} catch (restError) {
-						const errorMessage = restError instanceof Error ? restError.message : String(restError);
-
-						// Detect specific error types for better logging and handling
-						const isTimeout = errorMessage.includes('timed out');
-						const isRateLimit = errorMessage.includes('429') || errorMessage.toLowerCase().includes('rate limit');
-						const isAuthError = errorMessage.includes('403') || errorMessage.includes('401');
-
-						if (isTimeout) {
-							logger.warn({ error: errorMessage, fileKey }, "REST API timed out after 30s, falling back to Desktop Bridge");
-						} else if (isRateLimit) {
-							logger.warn({ error: errorMessage, fileKey }, "REST API rate limited (429), falling back to Desktop Bridge");
-						} else if (isAuthError) {
-							logger.warn({ error: errorMessage, fileKey }, "REST API auth error, check FIGMA_ACCESS_TOKEN validity");
-						} else {
-							logger.warn({ error: errorMessage, fileKey }, "REST API failed, will try Desktop Bridge fallback");
-						}
-						// Don't throw - fall through to Desktop Bridge
-					}
-				}
-
-				// FALLBACK: Try Desktop connection (when no token available OR as secondary fallback)
+				// PRIMARY: Try Desktop Bridge first (local connection)
 				// Only call ensureInitialized for CDP path — skip when transport-agnostic connector exists
-				if (ensureInitialized && !getDesktopConnector && !parseFromConsole && (!hasToken || !restApiSucceeded)) {
+				if (ensureInitialized && !getDesktopConnector && !parseFromConsole) {
 					logger.info("Calling ensureInitialized to initialize browser manager (CDP path)");
 					await ensureInitialized();
 				}
 
 				const browserManager = getBrowserManager?.();
 				const hasDesktopConnection = !!getDesktopConnector || !!browserManager;
-				logger.info({ hasBrowserManager: !!browserManager, hasDesktopConnector: !!getDesktopConnector, parseFromConsole, hasToken, restApiSucceeded }, "Desktop connection check");
+				logger.info({ hasBrowserManager: !!browserManager, hasDesktopConnector: !!getDesktopConnector, parseFromConsole, hasToken }, "Desktop connection check");
 
 				// Debug: Log why Desktop connection might be skipped
 				if (!hasDesktopConnection) {
 					logger.error("Desktop connection skipped: neither connector nor browserManager available");
 				} else if (parseFromConsole) {
 					logger.info("Desktop connection skipped: parseFromConsole is true");
-				} else if (restApiSucceeded) {
-					logger.info("Desktop connection skipped: REST API already succeeded");
 				}
 
-				if (hasDesktopConnection && !parseFromConsole && (!hasToken || !restApiSucceeded)) {
+				if (hasDesktopConnection && !parseFromConsole) {
 					try {
 						logger.info({ fileKey }, "Attempting to get variables via Desktop connection");
 
@@ -2167,6 +1832,7 @@ export function registerFigmaAPITools(
 						const desktopResult = await connector.getVariablesFromPluginUI(fileKey);
 
 						if (desktopResult.success && desktopResult.variables) {
+							desktopBridgeSucceeded = true;
 							logger.info(
 								{
 									variableCount: desktopResult.variables.length,
@@ -2448,14 +2114,14 @@ export function registerFigmaAPITools(
 							error: desktopError,
 							message: errorMessage,
 							stack: errorStack
-						}, "Desktop connection failed, falling back to other methods");
+						}, "Desktop Bridge failed, falling back to REST API");
 
 						// Try to log to browser console if we have access to page
 						try {
 							if (browserManager) {
 								const page = await browserManager.getPage();
 								await page.evaluate((msg: string, stack: string | undefined) => {
-									console.error('[FIGMA_TOOLS] ❌ Desktop connection failed:', msg);
+									console.error('[FIGMA_TOOLS] ❌ Desktop Bridge failed:', msg);
 									if (stack) {
 										console.error('[FIGMA_TOOLS] Stack trace:', stack);
 									}
@@ -2466,6 +2132,324 @@ export function registerFigmaAPITools(
 						}
 
 						// Continue to try other methods
+					}
+				}
+
+				// FALLBACK: Try REST API if Desktop Bridge failed and token is available
+				if (hasToken && !parseFromConsole && !desktopBridgeSucceeded) {
+					try {
+						logger.info({ fileKey, includePublished, verbosity, enrich }, "Fetching variables via REST API (fallback: Desktop Bridge failed)");
+						const api = await getFigmaAPI();
+
+						// Wrap API call with timeout to prevent indefinite hangs (30s timeout)
+						const { local, published, localError, publishedError } = await withTimeout(
+							api.getAllVariables(fileKey),
+							30000,
+							'Figma Variables API'
+						);
+
+						// If local variables failed (e.g., 403), log and throw to exit REST API block
+						if (localError) {
+							logger.warn({ error: localError, fileKey }, "REST API failed to get local variables");
+							throw new Error(localError);
+						}
+
+						let localFormatted = formatVariables(local);
+						let publishedFormatted = includePublished
+							? formatVariables(published)
+							: null;
+
+						// DEBUG: Check if valuesByMode exists before filtering
+						if (localFormatted.variables[0]) {
+							logger.info(
+								{
+									hasValuesByMode: !!localFormatted.variables[0].valuesByMode,
+									variableKeys: Object.keys(localFormatted.variables[0]),
+									collectionCount: localFormatted.collections?.length,
+								},
+								'Variable structure before filtering'
+							);
+						}
+
+						// Apply collection/name/mode filtering if format is 'filtered'
+						if (format === 'filtered') {
+							// Create properly structured data for applyFilters
+							const dataToFilter = {
+								variables: localFormatted.variables,
+								variableCollections: localFormatted.collections,
+							};
+
+							const filteredLocal = applyFilters(
+								dataToFilter,
+								{ collection, namePattern, mode },
+								verbosity || "standard"
+							);
+
+							localFormatted = {
+								summary: localFormatted.summary,
+								collections: filteredLocal.variableCollections,
+								variables: filteredLocal.variables,
+							};
+
+							// Also filter published if included
+							if (includePublished && publishedFormatted) {
+								const dataToFilterPublished = {
+									variables: publishedFormatted.variables,
+									variableCollections: publishedFormatted.collections,
+								};
+
+								const filteredPublished = applyFilters(
+									dataToFilterPublished,
+									{ collection, namePattern, mode },
+									verbosity || "standard"
+								);
+
+								publishedFormatted = {
+									summary: publishedFormatted.summary,
+									collections: filteredPublished.variableCollections,
+									variables: filteredPublished.variables,
+								};
+							}
+						}
+
+						// Apply verbosity filtering after collection/name/mode filters
+						if (verbosity && verbosity !== 'full') {
+							const verbosityFiltered = applyFilters(
+								{
+									variables: localFormatted.variables,
+									variableCollections: localFormatted.collections,
+								},
+								{},
+								verbosity
+							);
+
+							localFormatted = {
+								...localFormatted,
+								collections: verbosityFiltered.variableCollections,
+								variables: verbosityFiltered.variables,
+							};
+
+							if (includePublished && publishedFormatted) {
+								const verbosityFilteredPublished = applyFilters(
+									{
+										variables: publishedFormatted.variables,
+										variableCollections: publishedFormatted.collections,
+									},
+									{},
+									verbosity
+								);
+
+								publishedFormatted = {
+									...publishedFormatted,
+									collections: verbosityFilteredPublished.variableCollections,
+									variables: verbosityFilteredPublished.variables,
+								};
+							}
+						}
+
+						// Apply pagination if requested
+						let paginationInfo;
+						if (pageSize) {
+							const startIdx = (page - 1) * pageSize;
+							const endIdx = startIdx + pageSize;
+							const totalVars = localFormatted.variables.length;
+
+							paginationInfo = {
+								page,
+								pageSize,
+								totalItems: totalVars,
+								totalPages: Math.ceil(totalVars / pageSize),
+								hasNextPage: endIdx < totalVars,
+								hasPrevPage: page > 1,
+							};
+
+							localFormatted.variables = localFormatted.variables.slice(startIdx, endIdx);
+
+							if (includePublished && publishedFormatted) {
+								publishedFormatted.variables = publishedFormatted.variables.slice(startIdx, endIdx);
+							}
+						}
+
+
+						// Cache the successful REST API response
+						const dataForCache = {
+							fileKey,
+							local: {
+								summary: localFormatted.summary,
+								collections: localFormatted.collections,
+								variables: localFormatted.variables,
+							},
+							...(includePublished &&
+								publishedFormatted && {
+									published: {
+										summary: publishedFormatted.summary,
+										collections: publishedFormatted.collections,
+										variables: publishedFormatted.variables,
+									},
+								}),
+							verbosity: verbosity || "standard",
+							enriched: enrich || false,
+							timestamp: Date.now(),
+							source: "rest_api",
+						};
+
+						if (variablesCache) {
+							variablesCache.set(fileKey, { data: dataForCache, timestamp: Date.now() });
+							logger.info({ fileKey }, "Cached REST API variables");
+						}
+
+						// Apply alias resolution if requested (REST API format has local.variables)
+						if (resolveAliases && localFormatted.variables?.length > 0) {
+							// Build maps from local variables and collections
+							const allVariablesMap = new Map<string, any>();
+							const collectionsMap = new Map<string, any>();
+
+							for (const v of localFormatted.variables || []) {
+								allVariablesMap.set(v.id, v);
+							}
+							for (const c of localFormatted.collections || []) {
+								collectionsMap.set(c.id, c);
+							}
+
+							// Also include published variables if available
+							if (publishedFormatted?.variables) {
+								for (const v of publishedFormatted.variables) {
+									allVariablesMap.set(v.id, v);
+								}
+							}
+							if (publishedFormatted?.collections) {
+								for (const c of publishedFormatted.collections) {
+									collectionsMap.set(c.id, c);
+								}
+							}
+
+							localFormatted.variables = resolveVariableAliases(
+								localFormatted.variables,
+								allVariablesMap,
+								collectionsMap
+							);
+
+							if (publishedFormatted?.variables) {
+								publishedFormatted.variables = resolveVariableAliases(
+									publishedFormatted.variables,
+									allVariablesMap,
+									collectionsMap
+								);
+							}
+
+							logger.info(
+								{ fileKey, resolvedCount: localFormatted.variables.length },
+								'Applied alias resolution to REST API variables'
+							);
+						}
+
+						// Handle resource_links format
+						if (returnAsLinks) {
+							const content: any[] = [
+								{
+									type: "text",
+									text: `Variables for file ${fileKey} (${localFormatted.variables.length} variables). Use figma_get_variable_by_id to fetch specific variables:\n\n`,
+								},
+							];
+
+							for (const variable of localFormatted.variables) {
+								content.push({
+									type: "resource",
+									resource: {
+										uri: `figma://variable/${fileKey}/${variable.id}`,
+										mimeType: "application/json",
+										text: `${variable.name} (${variable.resolvedType})`,
+									},
+								});
+							}
+
+							logger.info(
+								{
+									fileKey,
+									format: 'resource_links',
+									variableCount: localFormatted.variables.length,
+									linkCount: content.length - 1,
+								},
+								`Returning REST API variables as resource_links`
+							);
+
+							return { content };
+						}
+
+						// Build initial response data
+						const responseData = {
+							fileKey,
+							local: {
+								summary: localFormatted.summary,
+								collections: localFormatted.collections,
+								variables: localFormatted.variables,
+							},
+							...(includePublished &&
+								publishedFormatted && {
+									published: {
+										summary: publishedFormatted.summary,
+										collections: publishedFormatted.collections,
+										variables: publishedFormatted.variables,
+									},
+								}),
+							verbosity: verbosity || "standard",
+							enriched: enrich || false,
+							...(paginationInfo && { pagination: paginationInfo }),
+						};
+
+						// Mark REST API as successful
+						logger.info({ fileKey }, "REST API fetch successful, skipping Desktop Bridge");
+
+						// Use adaptive response to prevent context exhaustion
+						return adaptiveResponse(responseData, {
+							toolName: "figma_get_variables",
+							compressionCallback: (adjustedLevel: string) => {
+								// Re-apply filters with adjusted verbosity
+								const level = adjustedLevel as "inventory" | "summary" | "standard" | "full";
+								const refiltered = applyFilters(
+									{
+										variables: localFormatted.variables,
+										variableCollections: localFormatted.collections,
+									},
+									{ collection, namePattern, mode },
+									level
+								);
+
+								return {
+									...responseData,
+									local: {
+										...responseData.local,
+										variables: refiltered.variables,
+										collections: refiltered.variableCollections,
+									},
+									verbosity: level,
+								};
+							},
+							suggestedActions: [
+								"Use verbosity='inventory' or 'summary' for large variable sets",
+								"Apply filters: collection, namePattern, or mode parameters",
+								"Use pagination with pageSize parameter (default 50, max 100)",
+								"Use returnAsLinks=true to get resource_link references instead of full data",
+							],
+						});
+					} catch (restError) {
+						const errorMessage = restError instanceof Error ? restError.message : String(restError);
+
+						// Detect specific error types for better logging and handling
+						const isTimeout = errorMessage.includes('timed out');
+						const isRateLimit = errorMessage.includes('429') || errorMessage.toLowerCase().includes('rate limit');
+						const isAuthError = errorMessage.includes('403') || errorMessage.includes('401');
+
+						if (isTimeout) {
+							logger.warn({ error: errorMessage, fileKey }, "REST API timed out after 30s, falling back to Desktop Bridge");
+						} else if (isRateLimit) {
+							logger.warn({ error: errorMessage, fileKey }, "REST API rate limited (429), falling back to Desktop Bridge");
+						} else if (isAuthError) {
+							logger.warn({ error: errorMessage, fileKey }, "REST API auth error, check FIGMA_ACCESS_TOKEN validity");
+						} else {
+							logger.warn({ error: errorMessage, fileKey }, "REST API failed, will try Desktop Bridge fallback");
+						}
+						// Don't throw - fall through to Desktop Bridge
 					}
 				}
 
@@ -2547,7 +2531,7 @@ export function registerFigmaAPITools(
 				// FIXED: Jump directly to Styles API (fast) instead of full file data (slow)
 				if (errorMessage.includes("403")) {
 					try {
-						logger.info({ fileKey }, "Variables API requires Enterprise, falling back to Styles API");
+						logger.info({ fileKey }, "Variables REST API returned 403, falling back to Styles API");
 
 						let api;
 						try {
@@ -2569,7 +2553,7 @@ export function registerFigmaAPITools(
 						const formattedStyles = {
 							summary: {
 								total_styles: stylesData.meta?.styles?.length || 0,
-								message: "Variables API requires Enterprise. Here are your design styles instead.",
+								message: "Variables REST API unavailable. Here are your design styles instead.",
 								note: "These are Figma Styles (not Variables). Styles are the traditional way to store design tokens in Figma."
 							},
 							styles: stylesData.meta?.styles || []
@@ -2588,7 +2572,7 @@ export function registerFigmaAPITools(
 										{
 											fileKey,
 											source: "styles_api",
-											message: "Variables API requires an Enterprise plan. Retrieved your design system styles instead.",
+											message: "Variables REST API unavailable. Retrieved your design system styles instead.",
 											data: formattedStyles,
 											fallback_method: true,
 										}
@@ -2607,7 +2591,7 @@ export function registerFigmaAPITools(
 									text: JSON.stringify(
 										{
 											error: "Unable to extract variables or styles from this file",
-											message: "The Variables API requires an Enterprise plan, and the automatic style extraction encountered an error.",
+											message: "Variables REST API and style extraction both failed.",
 											possibleReasons: [
 												"The file may be private or require additional permissions",
 												"The file structure may not contain extractable styles",
@@ -2633,7 +2617,7 @@ export function registerFigmaAPITools(
 									error: errorMessage,
 									message: "Failed to retrieve Figma variables",
 									hint: errorMessage.includes("403")
-										? "Variables API requires Enterprise plan. Set useConsoleFallback=true for alternative method."
+										? "Variables REST API returned 403. Ensure Desktop Bridge plugin is running, or use parseFromConsole=true."
 										: "Make sure FIGMA_ACCESS_TOKEN is configured and has appropriate permissions",
 								}
 							),
@@ -2646,7 +2630,7 @@ export function registerFigmaAPITools(
 	);
 
 	// Tool 10: Get Component Data
-	const componentDescription = "Get component data in multiple formats: 'metadata' (default) — properties, variants, design tokens; 'reconstruction' — node tree spec for Reconstructor plugin; 'development' — filtered layout/visual props + optional image for UI implementation. For local/unpublished components, ensure the Desktop Bridge plugin is running. Batch-compatible.";
+	const componentDescription = "Get component or node data in multiple formats. Works on any node — not just components.\n\nFormats:\n- 'structure' — lightweight tree (~3KB): {id, name, type, layout, children} with full TEXT node detail. Best for discovering what's inside a node before making changes.\n- 'metadata' (default) — comprehensive documentation with properties/variants/tokens.\n- 'development' — filtered layout/visual/typography props + optional rendered image for UI implementation.\n- 'reconstruction' — node tree spec for Figma Component Reconstructor plugin.\n\nFor local/unpublished components, ensure the Desktop Bridge plugin is running. Batch-compatible.";
 	server.tool(
 		"figma_get_component",
 		componentDescription,
@@ -2662,24 +2646,30 @@ export function registerFigmaAPITools(
 				.string()
 				.describe("Component node ID (e.g., '123:456')"),
 			format: z
-				.enum(["metadata", "reconstruction", "development"])
+				.enum(["metadata", "reconstruction", "development", "structure"])
 				.optional()
 				.default("metadata")
-				.describe("Export format: 'metadata' (default) — comprehensive documentation with properties/variants/tokens. 'reconstruction' — node tree spec for Figma Component Reconstructor plugin. 'development' — filtered layout/visual/typography props + optional rendered image for UI implementation."),
-			includeImage: z
-				.boolean()
+				.describe("Export format: 'metadata' (default) — comprehensive documentation with properties/variants/tokens. 'reconstruction' — node tree spec for Figma Component Reconstructor plugin. 'development' — filtered layout/visual/typography props + optional rendered image for UI implementation. 'structure' — lightweight tree (~3KB): {id, name, type, layout, children} with full detail on TEXT nodes (characters, fontSize, fontName). Best for discovering node structure before making changes."),
+			includeImage: coerceBool()
 				.optional()
 				.default(true)
 				.describe("Include rendered image (development format only, default: true)"),
-			enrich: z
-				.boolean()
+			enrich: coerceBool()
 				.optional()
 				.describe(
 					"Set to true when user asks for: design token coverage, hardcoded value analysis, or component quality metrics. Adds token coverage analysis and hardcoded value detection. Default: false. Only applicable for metadata format."
 				),
+			depth: z
+				.coerce.number()
+				.int()
+				.min(1)
+				.max(10)
+				.optional()
+				.default(4)
+				.describe("Node tree depth (development format only). Default: 4. Increase to see deeply nested children like text nodes inside frames."),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ fileUrl, nodeId, format = "metadata", includeImage = true, enrich }) => {
+		async ({ fileUrl, nodeId, format = "metadata", includeImage = true, enrich, depth = 4 }) => {
 			try {
 				const url = fileUrl || getCurrentUrl();
 				if (!url) {
@@ -2694,6 +2684,87 @@ export function registerFigmaAPITools(
 				}
 
 				logger.info({ fileKey, nodeId, format, enrich }, "Fetching component data");
+
+				// STRUCTURE FORMAT: Lightweight tree via Desktop Bridge
+				if (format === "structure") {
+					try {
+						let connector: any;
+						if (getDesktopConnector) {
+							connector = await getDesktopConnector();
+						} else {
+							throw new Error("Structure format requires Desktop Bridge connection.");
+						}
+
+						const structResult = await connector.executeCodeViaUI(`
+							var nodeId = ${JSON.stringify(nodeId)};
+							var node = await figma.getNodeByIdAsync(nodeId);
+							if (!node) return { success: false, error: 'Node not found: ' + nodeId };
+
+							function extractStructure(n, depth) {
+								if (depth <= 0) return { id: n.id, name: n.name, type: n.type, truncated: true };
+								var info = { id: n.id, name: n.name, type: n.type };
+
+								// Size
+								if (n.width !== undefined) { info.width = Math.round(n.width); info.height = Math.round(n.height); }
+
+								// Layout (always useful)
+								if (n.layoutMode && n.layoutMode !== 'NONE') {
+									info.layout = { mode: n.layoutMode };
+									if (n.itemSpacing) info.layout.gap = n.itemSpacing;
+									if (n.paddingTop || n.paddingRight || n.paddingBottom || n.paddingLeft) {
+										info.layout.padding = [n.paddingTop || 0, n.paddingRight || 0, n.paddingBottom || 0, n.paddingLeft || 0];
+									}
+									if (n.primaryAxisAlignItems) info.layout.mainAlign = n.primaryAxisAlignItems;
+									if (n.counterAxisAlignItems) info.layout.crossAlign = n.counterAxisAlignItems;
+								}
+
+								// TEXT nodes: full detail
+								if (n.type === 'TEXT') {
+									info.characters = n.characters;
+									if (n.fontSize) info.fontSize = n.fontSize;
+									if (n.fontName) info.fontName = n.fontName;
+									if (n.textAlignHorizontal) info.textAlign = n.textAlignHorizontal;
+									if (n.fills && n.fills.length > 0 && n.fills[0].type === 'SOLID') {
+										var c = n.fills[0].color;
+										info.fillColor = '#' + [c.r, c.g, c.b].map(function(v) { return Math.round(v * 255).toString(16).padStart(2, '0'); }).join('');
+									}
+								}
+
+								// INSTANCE: component info
+								if (n.type === 'INSTANCE') {
+									try { info.mainComponent = n.mainComponent ? n.mainComponent.name : undefined; } catch(e) {}
+									if (n.componentProperties) {
+										info.properties = {};
+										for (var k of Object.keys(n.componentProperties)) {
+											var p = n.componentProperties[k];
+											info.properties[k] = { type: p.type, value: p.value };
+										}
+									}
+								}
+
+								// Recurse children
+								if (n.children && n.children.length > 0) {
+									info.children = n.children.map(function(c) { return extractStructure(c, depth - 1); });
+								}
+
+								return info;
+							}
+
+							var tree = extractStructure(node, ${depth});
+							return { success: true, tree: tree };
+						`);
+
+						if (structResult.error) throw new Error(structResult.error);
+						const sr = structResult.result || structResult;
+
+						return adaptiveResponse({ nodeId, format: "structure", tree: sr.tree || sr }, {
+							toolName: "figma_get_component (structure)",
+						});
+					} catch (error) {
+						const errorMessage = error instanceof Error ? error.message : String(error);
+						throw new Error(`Structure format failed: ${errorMessage}. Try format='development' with REST API fallback.`);
+					}
+				}
 
 				// DEVELOPMENT FORMAT: Uses REST API directly (no Desktop Bridge)
 				if (format === "development") {
@@ -2711,8 +2782,8 @@ export function registerFigmaAPITools(
 						);
 					}
 
-					// Get node data with depth for children
-					const nodeData = await api.getNodes(fileKey, [nodeId], { depth: 2 });
+					// Get node data with depth for children (configurable, default 4)
+					const nodeData = await api.getNodes(fileKey, [nodeId], { depth });
 					const node = nodeData.nodes?.[nodeId]?.document;
 
 					if (!node) {
@@ -3026,22 +3097,18 @@ export function registerFigmaAPITools(
 				.describe(
 					"Controls payload size: 'summary' (names/types only, ~85% smaller), 'standard' (essential properties, ~40% smaller), 'full' (everything). Default: summary"
 				),
-			enrich: z
-				.boolean()
+			enrich: coerceBool()
 				.optional()
 				.describe(
 					"Set to true when user asks for: CSS/Sass/Tailwind code, export formats, usage information, code examples, or design system exports. Adds resolved values, usage analysis, and export format examples. Default: false for backward compatibility"
 				),
-			include_usage: z
-				.boolean()
+			include_usage: coerceBool()
 				.optional()
 				.describe("Include component usage information (requires enrich=true)"),
-			include_exports: z
-				.boolean()
+			include_exports: coerceBool()
 				.optional()
 				.describe("Include export format examples (requires enrich=true)"),
-			export_formats: z
-				.array(z.enum(["css", "sass", "tailwind", "typescript", "json"]))
+			export_formats: jsonArray(z.array(z.enum(["css", "sass", "tailwind", "typescript", "json"])))
 				.optional()
 				.describe(
 					"Which code formats to generate examples for. Use when user mentions specific formats like 'CSS', 'Tailwind', 'SCSS', 'TypeScript', etc. Automatically enables enrichment. Default: all formats"
@@ -3142,13 +3209,17 @@ export function registerFigmaAPITools(
 					);
 				}
 
-				const finalResponse = {
+				const finalResponse: Record<string, unknown> = {
 					fileKey,
 					styles,
 					totalStyles: styles.length,
 					verbosity: verbosity || "standard",
 					enriched: enrich || false,
 				};
+
+				if (styles.length === 0) {
+					finalResponse.hint = "No styles found in this file. For library/remote styles, use figma_get_library_components with type=\x27style\x27.";
+				}
 
 				// Use adaptive response to prevent context exhaustion
 				return adaptiveResponse(finalResponse, {
@@ -3214,7 +3285,7 @@ Call as standalone (not inside figma_batch) — image responses are large.`,
 				.default("plugin")
 				.describe("Screenshot source: 'plugin' (default, live state) or 'api' (REST, may be stale)"),
 			scale: z
-				.number()
+				.coerce.number()
 				.min(0.5)
 				.max(4)
 				.optional()
@@ -3230,8 +3301,7 @@ Call as standalone (not inside figma_batch) — image responses are large.`,
 				.url()
 				.optional()
 				.describe("Figma file URL (for api source). Auto-detected from active connection."),
-			return_url: z
-				.boolean()
+			return_url: coerceBool()
 				.optional()
 				.default(false)
 				.describe("Return image URL only, valid 30 days (api source only)."),
@@ -3376,8 +3446,7 @@ Call as standalone (not inside figma_batch) — image responses are large.`,
 				.describe(
 					"ID of the INSTANCE node to update (e.g., '1:234'). Must be a component instance, not a regular frame."
 				),
-			properties: z
-				.record(z.string(), z.union([z.string(), z.boolean()]))
+			properties: jsonRecord(z.union([z.string(), coerceBool()]))
 				.describe(
 					"Properties to set. Keys are property names (e.g., 'Label', 'Show Icon', 'Size'). " +
 					"Values are strings for TEXT/VARIANT properties, booleans for BOOLEAN properties. " +

@@ -33,9 +33,7 @@ import {
 	formatVariables,
 } from "./core/figma-api.js";
 import { registerFigmaAPITools } from "./core/figma-tools.js";
-import { registerDesignCodeTools } from "./core/design-code-tools.js";
 import { registerBatchTool } from "./core/batch-tool.js";
-import { registerCommentTools } from "./core/comment-tools.js";
 import { SessionCache, CachedFigmaAPI } from "./core/session-cache.js";
 import { ProjectContextCache } from "./core/project-context.js";
 import { TeamLibraryCache } from "./core/team-library.js";
@@ -98,8 +96,8 @@ class LocalFigmaConsoleMCP {
 	private projectContextCache = new ProjectContextCache();
 	// Team library cache — team-wide published component/style catalog
 	private teamLibraryCache = new TeamLibraryCache();
-	// Team IDs from FIGMA_TEAM_ID env var (comma-separated)
-	private teamIds: string[] = [];
+	// Named design systems: name → team ID (from FIGMA_DESIGN_SYSTEMS or FIGMA_TEAM_ID)
+	private designSystems: Map<string, string> = new Map();
 
 	constructor() {
 		this.server = new McpServer(
@@ -108,7 +106,7 @@ class LocalFigmaConsoleMCP {
 				version: "0.1.0",
 			},
 			{
-				instructions: `## Figma Console MCP — Tool Reference (28 tools)
+				instructions: `## Figma Console MCP — Tool Reference (25 tools)
 
 ### Session Start
 1. figma_connection action='navigate' — open a Figma URL or switch files. ALWAYS first.
@@ -117,15 +115,15 @@ class LocalFigmaConsoleMCP {
 
 ### Read Data (start with lowest verbosity, escalate on demand)
 - figma_get_file_data — document tree. Start verbosity='summary' depth=1, then drill into nodeIds.
-- figma_get_variables — design tokens/variables. Start format='summary'. Requires Enterprise plan.
+- figma_get_variables — design tokens/variables. Start format='summary'. Works via Desktop Bridge on all plans.
 - figma_get_styles — color, text, effect, grid styles with optional code exports.
 - figma_get_component — single component detail (metadata | reconstruction | development format).
 - figma_find_components — search/browse components. Levels: overview → keys → summary → details.
-- figma_get_library_components — search team's published library by name (needs FIGMA_TEAM_ID).
+- figma_get_library_components — search team's published library by name (needs FIGMA_DESIGN_SYSTEMS).
 
 ### Write: Node Structure
 - figma_edit_node — action: resize | move | clone | delete | rename | reparent | reorder.
-- figma_create_child — create new child node inside a parent frame.
+- figma_create_nodes — create a node or entire node tree inside a parent. Supports COMPONENT type for reusable definitions.
 - figma_manage_page — action: create | delete | rename | switch | reorder | list.
 
 ### Write: Visual Properties
@@ -150,23 +148,54 @@ class LocalFigmaConsoleMCP {
 ### Observe & Debug
 - figma_screenshot — capture live state (source='plugin') or REST render (source='api'). Returns base64, call standalone — never inside figma_batch.
 - figma_console — action: get (past logs) | watch (real-time stream) | clear.
-- figma_comments — action: get | post | delete. Comments on the Figma file via REST API.
-
 ### Connection & Environment
 - figma_connection — action: navigate | status | reconnect | invalidate_cache | reload | list_files | changes.
 
-### Multi-Tool & Code Sync
+### Multi-Tool
 - figma_batch — run up to 25 tools in one request. Do NOT include figma_screenshot (payload too large).
-- figma_check_design_parity — compare Figma node specs against code. Detects drift.
-- figma_generate_component_doc — generate markdown documentation for a component.
+
+### Modifying Designs
+- NEVER delete and rebuild when a modification was requested. Inspect existing nodes → use set_* tools.
+- Before ANY edit: figma_get_selection or figma_edit_node action='inspect' to get current node IDs and state.
+- To find existing nodes: figma_get_file_data with the parent nodeId, depth=2. Never guess IDs.
+- To see recent changes (yours or user's): figma_connection action='changes'.
+- Modify with figma_set_text, figma_set_appearance, figma_set_layout — not by recreating trees.
+- Only use figma_create_nodes for NEW nodes that don't exist yet.
+- After visual changes: screenshot once to verify. Max 2 fix iterations, then ask the user.
+
+### Design Resources — Local vs Remote
+- Local variables/tokens: figma_get_variables format='summary' — live from Desktop Bridge cache.
+- Local styles: figma_get_styles — color, text, effect styles with resolved values.
+- Local components: figma_find_components verbosity='keys' query='Name' — cached keys for instantiation.
+- Remote/library components: figma_get_library_components namePattern='Name' — team library cache (60min TTL).
+- Remote/library styles: figma_get_library_components type='style' namePattern='Name' — returns style keys.
+- Style keys from the library work DIRECTLY as fillStyleId/textStyleId/effectStyleId — the plugin resolves keys internally. No need to convert keys to local IDs.
+- DO NOT inspect random nodes to discover colors/fonts/tokens. The caches above have everything indexed.
+
+### Figma Layout Rules (the API does NOT auto-fix layout)
+- Children in auto-layout default to FIXED sizing. Set layoutSizingHorizontal/Vertical explicitly via figma_set_layout.
+- TEXT in auto-layout: use layoutSizingHorizontal='FILL' to wrap text to parent width (textAutoResize is auto-applied).
+- TEXT without auto-layout parent: set explicit width instead.
+- GRID: children all stack at cell (0,0) by default. You MUST set gridColumnAnchorIndex + gridRowAnchorIndex on EACH child via figma_set_layout.
+- Creating a frame does NOT make it auto-layout. Set layoutMode explicitly.
+- Coordinates (x, y) are parent-relative. Section parents offset from page origin.
+
+### Component Instances
+- INSTANCE_SWAP overrides: figma_instantiate_component's overrides param ONLY handles TEXT and BOOLEAN properties. For INSTANCE_SWAP, you MUST call figma_set_instance_properties as a separate step after instantiation.
+- For component instances, ONLY use figma_set_instance_properties for text/variant/boolean changes. Direct text/fill edits silently fail.
+- When using figma_batch with component instantiation, compact mode now includes instance IDs. Use verbose=true only if you need the full instance object.
+
+### Text Styles and Fills
+- To apply a text style while preserving a custom fill: (1) figma_set_text with textStyleId, then (2) figma_set_appearance with fills. The style sets typography; the fill override sticks on top.
+- When mixing text nodes in the same layout, ensure lineHeight values match. Mixing INTRINSIC (auto) with explicit percentages (e.g. 150%) causes baseline misalignment.
+- To verify style bindings after applying: figma_get_file_data on the specific node with depth=0 — check the styles.text or styles.fill field. The figma_get_styles tool only lists file-level style definitions, not per-node bindings.
 
 ### Rules
 - NodeIds are session-specific — NEVER reuse from a previous conversation. Always re-fetch.
-- Start at lowest verbosity/summary, escalate only when you need more detail.
-- After visual changes: screenshot → inspect → fix → re-screenshot (max 3 iterations).
+- Start at lowest verbosity/depth — verbosity='summary', depth=1. Escalate only when proven insufficient.
 - Place components inside a Section or Frame, never on bare canvas.
-- For component instances, ONLY use figma_set_instance_properties. Direct text/fill edits silently fail.
-- figma_get_variables needs a Figma Enterprise plan — it will error on other plans.
+- Test tool capabilities on ONE node first before applying to many.
+- figma_get_variables works via Desktop Bridge on all plans. REST API fallback available for Enterprise users.
 - Always verify file name before destructive operations when multiple files are connected.`,
 			},
 		);
@@ -529,7 +558,7 @@ class LocalFigmaConsoleMCP {
 			sessionCache: this.sessionCache,
 			projectContextCache: this.projectContextCache,
 			teamLibraryCache: this.teamLibraryCache,
-			teamIds: this.teamIds,
+			designSystems: this.designSystems,
 			getDesktopConnectorRaw: () => this.desktopConnector,
 			setDesktopConnector: (c) => { this.desktopConnector = c; },
 			getWsActualPort: () => this.wsActualPort,
@@ -556,21 +585,6 @@ class LocalFigmaConsoleMCP {
 			() => this.getDesktopConnector(), // Transport-aware connector factory
 		);
 
-		// Register Design-Code Parity & Documentation tools
-		registerDesignCodeTools(
-			this.server,
-			() => this.getFigmaAPI(),
-			() => this.getCurrentFileUrl(),
-			this.variablesCache,
-		);
-
-		// Register Comment tools
-		registerCommentTools(
-			this.server,
-			() => this.getFigmaAPI(),
-			() => this.getCurrentFileUrl(),
-		);
-
 		// Register Batch tool
 		registerBatchTool(this.server);
 
@@ -582,7 +596,7 @@ class LocalFigmaConsoleMCP {
 			() => this.getCurrentFileUrl(),
 			{
 				teamLibraryCache: this.teamLibraryCache,
-				teamIds: this.teamIds,
+				designSystems: this.designSystems,
 			},
 		);
 
@@ -687,7 +701,7 @@ class LocalFigmaConsoleMCP {
 					);
 				}
 
-				// Priority 2: Fall back to REST API (requires Enterprise plan)
+				// Priority 2: Fall back to REST API
 				const api = await this.getFigmaAPI();
 				const { local, localError } = await api.getAllVariables(fileKey);
 
@@ -792,7 +806,7 @@ class LocalFigmaConsoleMCP {
 						}
 					}
 
-					// 3. Try REST API (works only with Enterprise plan)
+					// 3. Try REST API as fallback
 					if (variables.length === 0) {
 						restApiAttempted = true;
 						try {
@@ -826,13 +840,13 @@ class LocalFigmaConsoleMCP {
 					if (!variablesAvailable) {
 						if (desktopBridgeFailed && restApiFailed) {
 							variableError =
-								"Desktop Bridge plugin not connected and REST API requires Enterprise plan. Please open the Desktop Bridge plugin in Figma to enable variable/token analysis.";
+								"Desktop Bridge plugin not connected and REST API unavailable. Please open the Desktop Bridge plugin in Figma to enable variable/token analysis.";
 						} else if (desktopBridgeFailed) {
 							variableError =
 								"Desktop Bridge plugin not connected. Please open the Desktop Bridge plugin in Figma to enable variable/token analysis.";
 						} else if (restApiFailed) {
 							variableError =
-								"REST API requires Figma Enterprise plan. Connect the Desktop Bridge plugin in Figma for variable/token access.";
+								"REST API unavailable. Connect the Desktop Bridge plugin in Figma for variable/token access.";
 						} else if (!desktopBridgeAttempted && !restApiAttempted) {
 							variableError =
 								"No variable fetch methods available. Connect the Desktop Bridge plugin in Figma.";
@@ -948,11 +962,26 @@ class LocalFigmaConsoleMCP {
 				"Starting Figma Console MCP (Local Mode)",
 			);
 
-			// Parse FIGMA_TEAM_ID env var (comma-separated for multiple teams)
-			const teamIdEnv = process.env.FIGMA_TEAM_ID?.trim();
-			if (teamIdEnv) {
-				this.teamIds = teamIdEnv.split(',').map(id => id.trim()).filter(Boolean);
-				logger.info({ teamIds: this.teamIds }, 'Team IDs configured for library discovery');
+			// Parse design systems config: FIGMA_DESIGN_SYSTEMS (JSON) or FIGMA_TEAM_ID (legacy)
+			const dsEnv = process.env.FIGMA_DESIGN_SYSTEMS?.trim();
+			if (dsEnv) {
+				try {
+					const parsed = JSON.parse(dsEnv);
+					for (const [name, id] of Object.entries(parsed)) {
+						this.designSystems.set(name, String(id));
+					}
+					logger.info({ designSystems: Object.fromEntries(this.designSystems) }, 'Design systems configured');
+				} catch (e) {
+					logger.error({ raw: dsEnv }, 'Failed to parse FIGMA_DESIGN_SYSTEMS — must be valid JSON like {"my-ds": "12345"}');
+				}
+			} else {
+				// Legacy fallback: FIGMA_TEAM_ID (comma-separated)
+				const teamIdEnv = process.env.FIGMA_TEAM_ID?.trim();
+				if (teamIdEnv) {
+					const ids = teamIdEnv.split(',').map(id => id.trim()).filter(Boolean);
+					ids.forEach((id, i) => this.designSystems.set(ids.length === 1 ? 'default' : `team-${i + 1}`, id));
+					logger.info({ designSystems: Object.fromEntries(this.designSystems) }, 'Design systems configured (from FIGMA_TEAM_ID)');
+				}
 			}
 
 			// Start WebSocket bridge server with port range fallback.
@@ -1095,10 +1124,10 @@ class LocalFigmaConsoleMCP {
 			logger.info("MCP server started successfully on stdio transport");
 
 			// Warm team library caches in background (non-blocking)
-			if (this.teamIds.length > 0) {
+			if (this.designSystems.size > 0) {
 				this.getFigmaAPI()
 					.then((api) => {
-						for (const teamId of this.teamIds) {
+						for (const teamId of this.designSystems.values()) {
 							this.teamLibraryCache.build(teamId, api).catch((err) => {
 								logger.debug({ teamId, error: err instanceof Error ? err.message : String(err) }, 'Failed to warm team library cache');
 							});

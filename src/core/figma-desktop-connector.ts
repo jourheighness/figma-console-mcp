@@ -1464,6 +1464,7 @@ export class FigmaDesktopConnector implements IFigmaConnector {
     textAutoResize?: string;
     textDecoration?: string;
     textCase?: string;
+    textStyleId?: string;
   }): Promise<any> {
     logger.info({ nodeId, textLength: text?.length ?? 0 }, 'Setting text content via plugin UI');
 
@@ -1483,22 +1484,14 @@ export class FigmaDesktopConnector implements IFigmaConnector {
   }
 
   /**
-   * Create a child node
+   * Create a single child node (flat, no children)
    */
   async createChildNode(
     parentId: string,
-    nodeType: 'RECTANGLE' | 'ELLIPSE' | 'FRAME' | 'TEXT' | 'LINE' | 'POLYGON' | 'STAR' | 'VECTOR',
-    properties?: {
-      name?: string;
-      x?: number;
-      y?: number;
-      width?: number;
-      height?: number;
-      fills?: any[];
-      text?: string;
-    }
+    nodeType: string,
+    properties?: Record<string, any>
   ): Promise<any> {
-    logger.info({ parentId, nodeType, properties }, 'Creating child node via plugin UI');
+    logger.info({ parentId, nodeType }, 'Creating child node via plugin UI');
 
     const frame = await this.findPluginUIFrame();
 
@@ -1511,6 +1504,30 @@ export class FigmaDesktopConnector implements IFigmaConnector {
       return result;
     } catch (error) {
       logger.error({ error, parentId, nodeType }, 'Create child node failed');
+      throw error;
+    }
+  }
+
+  /**
+   * Scaffold a full node tree with batched font loading
+   */
+  async scaffoldTree(
+    parentId: string,
+    tree: { nodeType: string; properties?: any; children?: any[] }
+  ): Promise<any> {
+    logger.info({ parentId, rootType: tree.nodeType }, 'Scaffolding tree via plugin UI');
+
+    const frame = await this.findPluginUIFrame();
+
+    try {
+      const result = await frame.evaluate(
+        `window.scaffoldTree(${JSON.stringify(parentId)}, ${JSON.stringify(tree)})`
+      );
+
+      logger.info({ success: result.success, treeId: result.tree?.id, fontsLoaded: result.fontsLoaded?.length }, 'Tree scaffolded');
+      return result;
+    } catch (error) {
+      logger.error({ error, parentId }, 'Scaffold tree failed');
       throw error;
     }
   }

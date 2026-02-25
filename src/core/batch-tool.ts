@@ -6,6 +6,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { jsonArray } from "./schema-coerce.js";
 import { createChildLogger } from "./logger.js";
 import { sendProgress } from "./progress.js";
 
@@ -47,8 +48,7 @@ export function registerBatchTool(server: McpServer): void {
 		"figma_batch",
 		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Recommended batch-friendly tools: figma_get_file_data, figma_get_variables, figma_get_styles, figma_find_components, figma_get_selection, figma_get_library_components. Screenshot tools (figma_screenshot) return large payloads that can overflow batch responses — call those as standalone requests instead.",
 		{
-			operations: z
-				.array(
+			operations: jsonArray(z.array(
 					z.object({
 						tool: z
 							.string()
@@ -69,7 +69,7 @@ export function registerBatchTool(server: McpServer): void {
 					}),
 				)
 				.min(1)
-				.max(MAX_OPERATIONS)
+				.max(MAX_OPERATIONS))
 				.describe("Array of tool operations to execute (1-25)"),
 			parallel: z
 				.boolean()
@@ -202,7 +202,14 @@ export function registerBatchTool(server: McpServer): void {
 					if (body.startsWith("{") || body.startsWith("[")) {
 						try {
 							const parsed = JSON.parse(body);
-							if (parsed.message) body = parsed.message;
+							if (parsed.message) {
+								body = parsed.message;
+								// Compact: append critical IDs that would otherwise be lost
+								if (!verbose) {
+									const id = parsed.id || parsed.instance?.id || parsed.style?.id || parsed.variable?.id || parsed.deleted?.id;
+									if (id) body += ` (id: ${id})`;
+								}
+							}
 							else if (parsed.summary) body = parsed.summary;
 							else if (parsed.error) body = `Error: ${parsed.error}`;
 							else if (!verbose) {

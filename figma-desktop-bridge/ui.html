@@ -549,7 +549,7 @@
     window.setTextContent = (nodeId, text, options) => {
       var params = { nodeId: nodeId, text: text };
       if (options) {
-        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase'];
+        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'textStyleId'];
         for (var i = 0; i < passthrough.length; i++) {
           if (options[passthrough[i]] !== undefined) params[passthrough[i]] = options[passthrough[i]];
         }
@@ -565,6 +565,14 @@
         nodeType: nodeType,
         properties: properties || {}
       }).catch(function(err) { return { success: false, error: err.message || String(err) }; });
+    };
+
+    // Scaffold a full node tree with batched font loading (30s timeout)
+    window.scaffoldTree = (parentId, tree) => {
+      return window.sendPluginCommand('SCAFFOLD_TREE', {
+        parentId: parentId,
+        tree: tree
+      }, 30000).catch(function(err) { return { success: false, error: err.message || String(err) }; });
     };
 
     // ============================================================================
@@ -647,6 +655,7 @@
         'REORDER_NODE': function(params) { return window.reorderNode(params.nodeId, params.index); },
         'SET_TEXT_CONTENT': function(params) { return window.setTextContent(params.nodeId, params.text, params); },
         'CREATE_CHILD_NODE': function(params) { return window.createChildNode(params.parentId, params.nodeType, params.properties); },
+        'SCAFFOLD_TREE': function(params) { return window.scaffoldTree(params.parentId, params.tree); },
         'CAPTURE_SCREENSHOT': function(params) { return window.captureScreenshot(params.nodeId, params); },
         'SET_INSTANCE_PROPERTIES': function(params) { return window.setInstanceProperties(params.nodeId, params.properties); },
         'GET_VARIABLES_DATA': function() {
@@ -1303,6 +1312,25 @@
         case 'CREATE_CHILD_NODE_RESULT':
           handleResult('CREATE_CHILD_NODE', 'node');
           break;
+        case 'SCAFFOLD_TREE_RESULT': {
+          // Custom handler: forward partialTree and fontsLoaded even on error
+          const request = window.__figmaPendingRequests.get(msg.requestId);
+          if (request) {
+            if (request.timeoutId) clearTimeout(request.timeoutId);
+            var result = { success: msg.success };
+            if (msg.success) {
+              result.tree = msg.tree;
+              if (msg.fontsLoaded) result.fontsLoaded = msg.fontsLoaded;
+              if (msg.fontErrors) result.fontErrors = msg.fontErrors;
+            } else {
+              result.error = msg.error || 'Unknown error';
+              if (msg.partialTree) result.partialTree = msg.partialTree;
+            }
+            request.resolve(result);
+            window.__figmaPendingRequests.delete(msg.requestId);
+          }
+          break;
+        }
 
         // NEW: Screenshot and instance properties (visual validation loop fix)
         case 'CAPTURE_SCREENSHOT_RESULT':

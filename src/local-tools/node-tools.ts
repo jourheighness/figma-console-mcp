@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { jsonArray, jsonObject, coerceBool } from "../core/schema-coerce.js";
 import { createChildLogger } from "../core/logger.js";
 import type { LocalToolDeps } from "./types.js";
 
@@ -35,10 +36,10 @@ function err(message: string, hint?: string) {
 export function registerNodeTools(deps: LocalToolDeps): void {
 	const { server, getDesktopConnector } = deps;
 
-	// Tool: Edit Node (resize, move, clone, delete, rename, reparent, reorder)
+	// Tool: Edit Node (resize, move, clone, delete, rename, reparent, reorder, detach, inspect)
 	server.tool(
 		"figma_edit_node",
-		`Perform structural node operations: resize, move, clone, delete, rename, reparent (move to new parent), or reorder (change z-order).
+		`Perform structural node operations: resize, move, clone, delete, rename, reparent (move to new parent), reorder (change z-order), detach (detach component instance), inspect (read node info), or focus (scroll viewport to node).
 
 Actions and required params:
 - resize: width, height (optional: withConstraints)
@@ -47,18 +48,21 @@ Actions and required params:
 - delete: (no extra params — destructive, undoable via Figma)
 - rename: newName
 - reparent: newParentId (optional: insertIndex)
-- reorder: insertIndex (z-order position within current parent, 0 = bottom)`,
+- reorder: insertIndex (z-order position within current parent, 0 = bottom)
+- detach: Detach a component instance into a plain frame. Only works on INSTANCE nodes.
+- inspect: Read-only. Returns node info: type, name, size, parent (id/name/type/layoutMode), children count. Use to discover parent context before creating/modifying nodes.
+- focus: Scroll and zoom the viewport to center on a node. Use at start of work to orient, or after creating/modifying nodes so the user can see the result.`,
 		{
 			nodeId: z.string().describe("The node ID to operate on"),
-			action: z.enum(["resize", "move", "clone", "delete", "rename", "reparent", "reorder"]).describe("Operation to perform"),
-			width: z.number().optional().describe("New width (resize)"),
-			height: z.number().optional().describe("New height (resize)"),
-			withConstraints: z.boolean().optional().default(true).describe("Respect child constraints during resize (default: true)"),
-			x: z.number().optional().describe("New X position (move)"),
-			y: z.number().optional().describe("New Y position (move)"),
+			action: z.enum(["resize", "move", "clone", "delete", "rename", "reparent", "reorder", "detach", "inspect", "focus"]).describe("Operation to perform"),
+			width: z.coerce.number().optional().describe("New width (resize)"),
+			height: z.coerce.number().optional().describe("New height (resize)"),
+			withConstraints: coerceBool().optional().default(true).describe("Respect child constraints during resize (default: true)"),
+			x: z.coerce.number().optional().describe("New X position (move)"),
+			y: z.coerce.number().optional().describe("New Y position (move)"),
 			newName: z.string().optional().describe("New name (rename)"),
 			newParentId: z.string().optional().describe("Target parent node ID (reparent)"),
-			insertIndex: z.number().optional().describe("Child index position (reparent, reorder). 0 = bottom/first."),
+			insertIndex: z.coerce.number().optional().describe("Child index position (reparent, reorder). 0 = bottom/first."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		async ({ nodeId, action, width, height, withConstraints, x, y, newName, newParentId, insertIndex }) => {
@@ -101,6 +105,74 @@ Actions and required params:
 						result = await connector.reorderNode(nodeId, insertIndex);
 						message = `Node reordered to index ${insertIndex}`;
 						break;
+					case "detach": {
+						const detachResult = await connector.executeCodeViaUI(`
+							var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
+							if (!node) return { success: false, error: 'Node not found: ' + ${JSON.stringify(nodeId)} };
+							if (node.type !== 'INSTANCE') return { success: false, error: 'detach only works on INSTANCE nodes, got ' + node.type };
+							var originalId = node.id;
+							var detached = node.detachInstance();
+							return {
+								success: true,
+								node: { id: detached.id, name: detached.name, type: detached.type, width: Math.round(detached.width), height: Math.round(detached.height) },
+								idChanged: detached.id !== originalId,
+								originalId: originalId
+							};
+						`);
+						if (detachResult.error) throw new Error(detachResult.error);
+						const dr = detachResult.result || detachResult;
+						if (!dr.success && dr.error) throw new Error(dr.error);
+						const detachedNode = dr.node;
+						let detachMsg = `Instance detached to plain frame`;
+						detachMsg += `\n  originalId: ${dr.originalId || nodeId}`;
+						detachMsg += `\n  newId: ${detachedNode?.id || "unknown"}`;
+						if (dr.idChanged) detachMsg += `\n  idChanged: true`;
+						if (detachedNode) detachMsg += `\n  ${fmtNode(detachedNode)}`;
+						return ok(detachMsg);
+					}
+					case "inspect": {
+						const inspectResult = await connector.executeCodeViaUI(`
+							var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
+							if (!node) return { success: false, error: 'Node not found: ' + ${JSON.stringify(nodeId)} };
+							var info = {
+								id: node.id, name: node.name, type: node.type,
+								width: node.width !== undefined ? Math.round(node.width) : undefined,
+								height: node.height !== undefined ? Math.round(node.height) : undefined,
+								visible: node.visible,
+							};
+							if (node.parent) {
+								info.parent = { id: node.parent.id, name: node.parent.name, type: node.parent.type };
+								if (node.parent.layoutMode) info.parent.layoutMode = node.parent.layoutMode;
+								if (node.parent.layoutWrap) info.parent.layoutWrap = node.parent.layoutWrap;
+								if (node.parent.primaryAxisAlignItems) info.parent.primaryAxisAlignItems = node.parent.primaryAxisAlignItems;
+								if (node.parent.counterAxisAlignItems) info.parent.counterAxisAlignItems = node.parent.counterAxisAlignItems;
+								if (node.parent.itemSpacing !== undefined) info.parent.itemSpacing = node.parent.itemSpacing;
+							}
+							if (node.children) info.childCount = node.children.length;
+							if (node.type === 'INSTANCE') {
+								info.componentId = node.componentProperties ? Object.keys(node.componentProperties).length + ' properties' : '0 properties';
+								try { info.mainComponentName = node.mainComponent ? node.mainComponent.name : undefined; } catch(e) {}
+							}
+							return { success: true, node: info };
+						`);
+						if (inspectResult.error) throw new Error(inspectResult.error);
+						const ir = inspectResult.result || inspectResult;
+						const nodeData = ir.node ?? ir;
+						return ok(typeof nodeData === "string" ? nodeData : JSON.stringify(nodeData, null, 2));
+					}
+					case "focus": {
+						const focusResult = await connector.executeCodeViaUI(`
+							var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
+							if (!node) return { success: false, error: 'Node not found: ' + ${JSON.stringify(nodeId)} };
+							figma.viewport.scrollAndZoomIntoView([node]);
+							figma.currentPage.selection = [node];
+							return { success: true, node: { id: node.id, name: node.name, type: node.type } };
+						`);
+						if (focusResult.error) throw new Error(focusResult.error);
+						const fr = focusResult.result || focusResult;
+						if (!fr.success && fr.error) throw new Error(fr.error);
+						return ok(`Viewport focused on ${fr.node?.name || nodeId} (${fr.node?.type || "unknown"})`);
+					}
 					default:
 						throw new Error(`Unknown action: ${action}`);
 				}
@@ -127,67 +199,65 @@ Actions and required params:
 Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient fills use type 'GRADIENT_LINEAR'/'GRADIENT_RADIAL' with gradientStops array. gradientTransform defaults to left-to-right if omitted.`,
 		{
 			nodeId: z.string().describe("The node ID to modify"),
-			fills: z
-				.array(
+			fills: jsonArray(z.array(
 					z.union([
 						z.object({
 							type: z.literal("SOLID").describe("Solid fill"),
 							color: z.string().describe("Hex color string"),
-							opacity: z.number().optional().describe("Opacity 0-1"),
+							opacity: z.coerce.number().optional().describe("Opacity 0-1"),
 						}),
 						z.object({
 							type: z.enum(["GRADIENT_LINEAR", "GRADIENT_RADIAL", "GRADIENT_ANGULAR", "GRADIENT_DIAMOND"]).describe("Gradient type"),
 							gradientStops: z.array(z.object({
-								position: z.number().describe("Stop position 0-1"),
+								position: z.coerce.number().describe("Stop position 0-1"),
 								color: z.string().describe("Hex color string"),
 							})).describe("Gradient color stops"),
-							gradientTransform: z.array(z.array(z.number()).length(3)).length(2).optional()
+							gradientTransform: z.array(z.array(z.coerce.number()).length(3)).length(2).optional()
 								.describe("2x3 affine transform matrix [[a,b,tx],[c,d,ty]]. Default: left-to-right linear."),
-							opacity: z.number().optional().describe("Opacity 0-1"),
+							opacity: z.coerce.number().optional().describe("Opacity 0-1"),
 						}),
 					])
-				)
+				))
 				.optional()
 				.describe("Fill paints array (solid or gradient)"),
-			strokes: z
-				.array(
+			strokes: jsonArray(z.array(
 					z.object({
 						type: z.literal("SOLID").describe("Stroke type"),
 						color: z.string().describe("Hex color string"),
-						opacity: z.number().optional().describe("Opacity 0-1"),
+						opacity: z.coerce.number().optional().describe("Opacity 0-1"),
 					}),
-				)
+				))
 				.optional()
 				.describe("Stroke paints array"),
-			strokeWeight: z.number().optional().describe("Stroke thickness in pixels"),
+			strokeWeight: z.coerce.number().optional().describe("Stroke thickness in pixels"),
 			strokeAlign: z.enum(["INSIDE", "OUTSIDE", "CENTER"]).optional().describe("Stroke alignment"),
 			strokeCap: z.enum(["NONE", "ROUND", "SQUARE", "ARROW_LINES", "ARROW_EQUILATERAL"]).optional().describe("Stroke cap style"),
-			dashPattern: z.array(z.number()).optional().describe("Dash pattern [dash, gap] in pixels (e.g., [5, 3])"),
-			opacity: z.number().min(0).max(1).optional().describe("Node opacity 0-1"),
-			cornerRadius: z.number().optional().describe("Uniform corner radius in pixels"),
-			cornerRadii: z.object({
-				topLeft: z.number(),
-				topRight: z.number(),
-				bottomRight: z.number(),
-				bottomLeft: z.number(),
-			}).optional().describe("Individual corner radii (overrides cornerRadius)"),
-			rotation: z.number().optional().describe("Rotation in degrees (0-360)"),
-			effects: z.array(z.object({
+			dashPattern: jsonArray(z.array(z.coerce.number())).optional().describe("Dash pattern [dash, gap] in pixels (e.g., [5, 3])"),
+			opacity: z.coerce.number().min(0).max(1).optional().describe("Node opacity 0-1"),
+			cornerRadius: z.coerce.number().optional().describe("Uniform corner radius in pixels"),
+			cornerRadii: jsonObject(z.object({
+				topLeft: z.coerce.number(),
+				topRight: z.coerce.number(),
+				bottomRight: z.coerce.number(),
+				bottomLeft: z.coerce.number(),
+			})).optional().describe("Individual corner radii (overrides cornerRadius)"),
+			rotation: z.coerce.number().optional().describe("Rotation in degrees (0-360)"),
+			effects: jsonArray(z.array(z.object({
 				type: z.enum(["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"]).describe("Effect type"),
-				visible: z.boolean().optional().default(true).describe("Whether effect is visible"),
-				radius: z.number().optional().describe("Blur radius"),
+				visible: coerceBool().optional().default(true).describe("Whether effect is visible"),
+				radius: z.coerce.number().optional().describe("Blur radius"),
 				color: z.string().optional().describe("Shadow color (hex)"),
 				offset: z.object({
-					x: z.number(),
-					y: z.number(),
+					x: z.coerce.number(),
+					y: z.coerce.number(),
 				}).optional().describe("Shadow offset (for shadow types)"),
-				spread: z.number().optional().describe("Shadow spread (for shadow types)"),
+				spread: z.coerce.number().optional().describe("Shadow spread (for shadow types)"),
 				blendMode: z.enum([
 					"NORMAL", "DARKEN", "MULTIPLY", "COLOR_BURN", "LIGHTEN", "SCREEN",
 					"COLOR_DODGE", "OVERLAY", "SOFT_LIGHT", "HARD_LIGHT", "DIFFERENCE",
 					"EXCLUSION", "HUE", "SATURATION", "COLOR", "LUMINOSITY",
 				]).optional().default("NORMAL").describe("Blend mode for this effect"),
-			})).optional().describe("Effects array (shadows, blurs)"),
+			}))).optional().describe("Effects array (shadows, blurs)"),
 			blendMode: z.enum([
 				"NORMAL", "DARKEN", "MULTIPLY", "COLOR_BURN", "LIGHTEN", "SCREEN",
 				"COLOR_DODGE", "OVERLAY", "SOFT_LIGHT", "HARD_LIGHT", "DIFFERENCE",
@@ -196,15 +266,15 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 			fillStyleId: z.string().optional().describe("Paint style ID to apply as fill (from figma_create_style list). Empty string to detach."),
 			strokeStyleId: z.string().optional().describe("Paint style ID to apply as stroke. Empty string to detach."),
 			effectStyleId: z.string().optional().describe("Effect style ID to apply. Empty string to detach."),
-			variableBindings: z.array(z.object({
+			variableBindings: jsonArray(z.array(z.object({
 				field: z.enum([
 					"fills", "strokes", "opacity", "cornerRadius",
 					"topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius",
 					"strokeWeight", "rotation", "visible",
 				]).describe("Node property to bind"),
 				variableId: z.string().describe("Variable ID (e.g. 'VariableID:123:456'). Empty string to unbind."),
-				paintIndex: z.number().optional().describe("Paint index within fills/strokes array (default: 0). Only for fills/strokes fields."),
-			})).optional().describe("Bind variables to node properties. Use figma_get_variables to get variable IDs first."),
+				paintIndex: z.coerce.number().optional().describe("Paint index within fills/strokes array (default: 0). Only for fills/strokes fields."),
+			}))).optional().describe("Bind variables to node properties. Use figma_get_variables to get variable IDs first."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async ({ nodeId, fills, strokes, strokeWeight, strokeAlign, strokeCap, dashPattern, opacity, cornerRadius, cornerRadii, rotation, effects, blendMode, fillStyleId, strokeStyleId, effectStyleId, variableBindings }) => {
@@ -212,41 +282,61 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 				const connector = await getDesktopConnector();
 				const applied: string[] = [];
 
-				// Use existing connector methods for fills, strokes, opacity, cornerRadius
-				if (fills !== undefined) {
-					const result = await connector.setNodeFills(nodeId, fills);
-					if (!result.success) throw new Error(result.error || "Failed to set fills");
-					applied.push("fills");
-				}
-
-				if (strokes !== undefined) {
-					const result = await connector.setNodeStrokes(nodeId, strokes, strokeWeight);
-					if (!result.success) throw new Error(result.error || "Failed to set strokes");
-					applied.push("strokes");
-				} else if (strokeWeight !== undefined) {
-					// strokeWeight without new strokes — update weight only
-					const result = await connector.setNodeStrokes(nodeId, [], strokeWeight);
-					if (!result.success) throw new Error(result.error || "Failed to set stroke weight");
-					applied.push("strokeWeight");
-				}
-
-				if (opacity !== undefined) {
-					const result = await connector.setNodeOpacity(nodeId, opacity);
-					if (!result.success) throw new Error(result.error || "Failed to set opacity");
-					applied.push("opacity");
-				}
-
-				if (cornerRadius !== undefined) {
-					const result = await connector.setNodeCornerRadius(nodeId, cornerRadius);
-					if (!result.success) throw new Error(result.error || "Failed to set corner radius");
-					applied.push("cornerRadius");
-				}
-
-				// Properties that need executeCodeViaUI
+				// All properties batched into a single executeCodeViaUI call
 				const codeLines: string[] = [];
 				codeLines.push(`var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});`);
 				codeLines.push(`if (!node) throw new Error('Node not found: ${nodeId}');`);
 				let needsCodeExec = false;
+
+				if (fills !== undefined) {
+					codeLines.push(`var _rawFills = ${JSON.stringify(fills)};`);
+					codeLines.push(`node.fills = _rawFills.map(function(fill) {
+						if (fill.type === 'SOLID' && typeof fill.color === 'string') {
+							var rgb = hexToFigmaRGB(fill.color);
+							return { type: 'SOLID', color: { r: rgb.r, g: rgb.g, b: rgb.b }, opacity: rgb.a !== undefined ? rgb.a : (fill.opacity !== undefined ? fill.opacity : 1) };
+						}
+						if (fill.type && fill.type.indexOf('GRADIENT') === 0 && fill.gradientStops) {
+							var stops = fill.gradientStops.map(function(stop) {
+								if (typeof stop.color === 'string') { var rgba = hexToFigmaRGB(stop.color); return { position: stop.position, color: { r: rgba.r, g: rgba.g, b: rgba.b, a: rgba.a !== undefined ? rgba.a : 1 } }; }
+								return stop;
+							});
+							return { type: fill.type, gradientStops: stops, gradientTransform: fill.gradientTransform || [[1,0,0],[0,1,0]], opacity: fill.opacity !== undefined ? fill.opacity : 1, visible: true };
+						}
+						return fill;
+					});`);
+					applied.push("fills");
+					needsCodeExec = true;
+				}
+
+				if (strokes !== undefined) {
+					codeLines.push(`var _rawStrokes = ${JSON.stringify(strokes)};`);
+					codeLines.push(`node.strokes = _rawStrokes.map(function(s) {
+						if (s.type === 'SOLID' && typeof s.color === 'string') {
+							var rgb = hexToFigmaRGB(s.color);
+							return { type: 'SOLID', color: { r: rgb.r, g: rgb.g, b: rgb.b }, opacity: rgb.a !== undefined ? rgb.a : (s.opacity !== undefined ? s.opacity : 1) };
+						}
+						return s;
+					});`);
+					if (strokeWeight !== undefined) codeLines.push(`node.strokeWeight = ${strokeWeight};`);
+					applied.push("strokes");
+					needsCodeExec = true;
+				} else if (strokeWeight !== undefined) {
+					codeLines.push(`node.strokeWeight = ${strokeWeight};`);
+					applied.push("strokeWeight");
+					needsCodeExec = true;
+				}
+
+				if (opacity !== undefined) {
+					codeLines.push(`node.opacity = ${opacity};`);
+					applied.push("opacity");
+					needsCodeExec = true;
+				}
+
+				if (cornerRadius !== undefined) {
+					codeLines.push(`node.cornerRadius = ${cornerRadius};`);
+					applied.push("cornerRadius");
+					needsCodeExec = true;
+				}
 
 				if (cornerRadii !== undefined) {
 					codeLines.push(`node.topLeftRadius = ${cornerRadii.topLeft};`);
@@ -388,14 +478,14 @@ Common patterns:
 			actionType: z.enum(["NAVIGATE", "SWAP", "OVERLAY", "SCROLL_TO", "URL", "BACK", "CLOSE", "SET_VARIABLE"]).optional().describe("Action to perform on trigger (required for add)"),
 			destinationId: z.string().optional().describe("Target frame/node ID (for NAVIGATE, SWAP, OVERLAY, SCROLL_TO)"),
 			url: z.string().optional().describe("URL to open (for URL action)"),
-			timeout: z.number().optional().describe("Timeout in ms (for AFTER_TIMEOUT trigger)"),
+			timeout: z.coerce.number().optional().describe("Timeout in ms (for AFTER_TIMEOUT trigger)"),
 			transition: z.object({
 				type: z.enum(["DISSOLVE", "SMART_ANIMATE", "SCROLL_ANIMATE"]).describe("Transition type"),
-				duration: z.number().optional().default(300).describe("Duration in ms"),
+				duration: z.coerce.number().optional().default(300).describe("Duration in ms"),
 				easing: z.enum(["LINEAR", "EASE_IN", "EASE_OUT", "EASE_IN_AND_OUT", "EASE_IN_BACK", "EASE_OUT_BACK", "EASE_IN_AND_OUT_BACK", "CUSTOM_CUBIC_BEZIER"]).optional().default("EASE_IN_AND_OUT").describe("Easing function"),
 			}).optional().describe("Transition animation (only for NODE-type actions: NAVIGATE, SWAP, OVERLAY, SCROLL_TO)"),
-			overlayOffset: z.object({ x: z.number(), y: z.number() }).optional().describe("Overlay position offset (for OVERLAY action). Only works if the destination frame's overlayPositionType is already MANUAL (set in Figma UI — read-only in Plugin API)."),
-			reactionIndex: z.number().optional().describe("Index of reaction to remove (for remove action)"),
+			overlayOffset: z.object({ x: z.coerce.number(), y: z.coerce.number() }).optional().describe("Overlay position offset (for OVERLAY action). Only works if the destination frame's overlayPositionType is already MANUAL (set in Figma UI — read-only in Plugin API)."),
+			reactionIndex: z.coerce.number().optional().describe("Index of reaction to remove (for remove action)"),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		async ({ nodeId, action, trigger, actionType, destinationId, url, timeout, transition, overlayOffset, reactionIndex }) => {
@@ -526,50 +616,50 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 			description: z.string().optional().describe("Style description"),
 			styleId: z.string().optional().describe("Style ID (required for update/delete)"),
 			// Paint style properties
-			fills: z.array(z.object({
+			fills: jsonArray(z.array(z.object({
 				type: z.enum(["SOLID", "GRADIENT_LINEAR", "GRADIENT_RADIAL"]),
 				color: z.string().optional().describe("Hex color (for SOLID)"),
-				opacity: z.number().optional(),
+				opacity: z.coerce.number().optional(),
 				gradientStops: z.array(z.object({
-					position: z.number(),
+					position: z.coerce.number(),
 					color: z.string(),
 				})).optional().describe("Gradient stops"),
-				gradientTransform: z.array(z.array(z.number()).length(3)).length(2).optional()
+				gradientTransform: z.array(z.array(z.coerce.number()).length(3)).length(2).optional()
 					.describe("2x3 affine transform matrix [[a,b,tx],[c,d,ty]]. Default: left-to-right linear."),
-			})).optional().describe("Fills for paint style"),
+			}))).optional().describe("Fills for paint style"),
 			// Text style properties
 			fontFamily: z.string().optional(),
 			fontStyle: z.string().optional().default("Regular"),
-			fontSize: z.number().optional(),
-			lineHeight: z.object({
-				value: z.number().optional(),
+			fontSize: z.coerce.number().optional(),
+			lineHeight: jsonObject(z.object({
+				value: z.coerce.number().optional(),
 				unit: z.enum(["PIXELS", "PERCENT", "AUTO"]),
-			}).optional(),
-			letterSpacing: z.object({
-				value: z.number(),
+			})).optional(),
+			letterSpacing: jsonObject(z.object({
+				value: z.coerce.number(),
 				unit: z.enum(["PIXELS", "PERCENT"]).optional().default("PIXELS"),
-			}).optional(),
+			})).optional(),
 			textAlignHorizontal: z.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional().describe("Horizontal text alignment"),
 			textAlignVertical: z.enum(["TOP", "CENTER", "BOTTOM"]).optional().describe("Vertical text alignment"),
 			textAutoResize: z.enum(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]).optional().describe("How text resizes to fit"),
 			textDecoration: z.enum(["NONE", "UNDERLINE", "STRIKETHROUGH"]).optional().describe("Text decoration"),
 			textCase: z.enum(["ORIGINAL", "UPPER", "LOWER", "TITLE", "SMALL_CAPS", "SMALL_CAPS_FORCED"]).optional().describe("Text case transformation"),
-			paragraphSpacing: z.number().optional().describe("Spacing between paragraphs in px"),
-			paragraphIndent: z.number().optional().describe("First-line indent in px"),
+			paragraphSpacing: z.coerce.number().optional().describe("Spacing between paragraphs in px"),
+			paragraphIndent: z.coerce.number().optional().describe("First-line indent in px"),
 			// Effect style properties
-			effects: z.array(z.object({
+			effects: jsonArray(z.array(z.object({
 				type: z.enum(["DROP_SHADOW", "INNER_SHADOW", "LAYER_BLUR", "BACKGROUND_BLUR"]),
-				visible: z.boolean().optional().default(true),
-				radius: z.number().optional(),
+				visible: coerceBool().optional().default(true),
+				radius: z.coerce.number().optional(),
 				color: z.string().optional().describe("Hex color (e.g. '#00000040')"),
-				offset: z.object({ x: z.number(), y: z.number() }).optional(),
-				spread: z.number().optional(),
+				offset: z.object({ x: z.coerce.number(), y: z.coerce.number() }).optional(),
+				spread: z.coerce.number().optional(),
 				blendMode: z.enum([
 					"NORMAL", "DARKEN", "MULTIPLY", "COLOR_BURN", "LIGHTEN", "SCREEN",
 					"COLOR_DODGE", "OVERLAY", "SOFT_LIGHT", "HARD_LIGHT", "DIFFERENCE",
 					"EXCLUSION", "HUE", "SATURATION", "COLOR", "LUMINOSITY",
 				]).optional().default("NORMAL").describe("Blend mode for this effect"),
-			})).optional().describe("Effects for effect style"),
+			}))).optional().describe("Effects for effect style"),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		async ({ action, styleType, name, description, styleId, fills, fontFamily, fontStyle, fontSize, lineHeight, letterSpacing, textAlignHorizontal, textAlignVertical, textAutoResize, textDecoration, textCase, paragraphSpacing, paragraphIndent, effects }) => {
@@ -687,7 +777,7 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 						if (list.length === 0) continue;
 						sections.push(`${type} (${list.length}):\n${list.map((s: any) => `  ${s.id}  "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n")}`);
 					}
-					return ok(sections.length ? sections.join("\n\n") : "No local styles found");
+					return ok(sections.length ? sections.join("\n\n") : "No local styles found. For library/remote styles, use figma_get_library_components with type='style'.");
 				} else if (action === "delete") {
 					return ok(`Style deleted — "${r.deleted}"`);
 				} else {
@@ -710,7 +800,7 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 			name: z.string().optional().describe("Page name (for create, or target page for switch)"),
 			pageId: z.string().optional().describe("Page ID (for delete, rename, switch, reorder)"),
 			newName: z.string().optional().describe("New name (for rename)"),
-			index: z.number().optional().describe("Target position index (for reorder, 0-based)"),
+			index: z.coerce.number().optional().describe("Target position index (for reorder, 0-based)"),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
 		async ({ action, name, pageId, newName, index }) => {
@@ -790,19 +880,19 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 		{
 			nodeId: z.string().describe("The text node ID"),
 			text: z.string().optional().describe("The new text content (omit to keep existing text and only change styling)"),
-			fontSize: z.number().optional().describe("Font size in pixels"),
+			fontSize: z.coerce.number().optional().describe("Font size in pixels"),
 			fontFamily: z.string().optional().describe("Font family name (e.g., 'Inter', 'Roboto'). Must be installed in Figma."),
 			fontStyle: z.string().optional().describe("Font style name (e.g., 'Regular', 'Bold', 'Semi Bold', 'Italic', 'Bold Italic')"),
 			textAlignHorizontal: z.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional().describe("Horizontal text alignment"),
 			textAlignVertical: z.enum(["TOP", "CENTER", "BOTTOM"]).optional().describe("Vertical text alignment"),
-			lineHeight: z.object({
-				value: z.number().optional().describe("Line height value (omit for AUTO)"),
+			lineHeight: jsonObject(z.object({
+				value: z.coerce.number().optional().describe("Line height value (omit for AUTO)"),
 				unit: z.enum(["PIXELS", "PERCENT", "AUTO"]).describe("Unit type"),
-			}).optional().describe("Line height setting"),
-			letterSpacing: z.object({
-				value: z.number().describe("Letter spacing value"),
+			})).optional().describe("Line height setting"),
+			letterSpacing: jsonObject(z.object({
+				value: z.coerce.number().describe("Letter spacing value"),
 				unit: z.enum(["PIXELS", "PERCENT"]).optional().default("PIXELS").describe("Unit (default: PIXELS)"),
-			}).optional().describe("Letter spacing"),
+			})).optional().describe("Letter spacing"),
 			textAutoResize: z.enum(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]).optional().describe("How the text node resizes to fit content"),
 			textDecoration: z.enum(["NONE", "UNDERLINE", "STRIKETHROUGH"]).optional().describe("Text decoration"),
 			textCase: z.enum(["ORIGINAL", "UPPER", "LOWER", "TITLE", "SMALL_CAPS", "SMALL_CAPS_FORCED"]).optional().describe("Text case transformation"),
@@ -823,6 +913,7 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 				if (textAutoResize !== undefined) options.textAutoResize = textAutoResize;
 				if (textDecoration !== undefined) options.textDecoration = textDecoration;
 				if (textCase !== undefined) options.textCase = textCase;
+				if (textStyleId !== undefined) options.textStyleId = textStyleId;
 
 				const result = await connector.setTextContent(
 					nodeId,
@@ -832,16 +923,6 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 
 				if (!result.success) {
 					throw new Error(result.error || "Failed to set text");
-				}
-
-				if (textStyleId !== undefined) {
-					const styleResult = await connector.executeCodeViaUI(
-						`var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
-						if (!node || node.type !== 'TEXT') throw new Error('Text node not found');
-						await node.setTextStyleIdAsync(${JSON.stringify(textStyleId)});
-						return { success: true };`
-					);
-					if (styleResult.error) throw new Error(styleResult.error);
 				}
 
 				const stylePart = textStyleId !== undefined ? (textStyleId === "" ? " (style detached)" : " + style applied") : "";
@@ -857,55 +938,105 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 		},
 	);
 
-	// Tool: Create Child Node
+	// Tool: Create Child Node (supports nested tree creation in one call)
 	server.tool(
-		"figma_create_child",
-		"Create a new child node inside a parent container. Useful for adding shapes, text, or frames to existing structures.",
+		"figma_create_nodes",
+		`Create a node or an entire node tree inside a parent container. Single node or deeply nested — one call, no round-trips. Fonts are batch-loaded before any nodes are created, so TEXT-heavy trees won't time out.
+
+Supported types: RECTANGLE, ELLIPSE, FRAME, COMPONENT, TEXT, LINE.
+COMPONENT creates a reusable component definition (same as FRAME but publishable and instantiable via figma_instantiate_component). Use FRAME for non-reusable containers.
+
+Single node:
+  parentId: "1:234", nodeType: "RECTANGLE", properties: { name: "Bg", width: 320, height: 200, fills: [{ type: "SOLID", color: "#F0F0F0" }] }
+
+Full tree (card with header + body):
+  parentId: "1:234",
+  nodeType: "FRAME",
+  properties: { name: "Card", width: 320, layoutMode: "VERTICAL", itemSpacing: 16, padding: 20 },
+  children: [
+    { nodeType: "TEXT", properties: { name: "Title", text: "Hello", fontSize: 24, fontFamily: "Inter", fontStyle: "Bold" } },
+    { nodeType: "FRAME", properties: { name: "Content", layoutMode: "VERTICAL", itemSpacing: 8 }, children: [
+      { nodeType: "TEXT", properties: { text: "Body text here" } }
+    ]}
+  ]
+
+Coordinates: x/y are always relative to the parent node (not absolute page position). For section parents, this means absolute_x = section.x + child.x.
+
+On partial failure (e.g. bad child type mid-tree), returns what was created before the error.`,
 		{
 			parentId: z.string().describe("The parent node ID"),
 			nodeType: z
-				.enum(["RECTANGLE", "ELLIPSE", "FRAME", "TEXT", "LINE"])
-				.describe("Type of node to create"),
-			properties: z
-				.object({
+				.enum(["RECTANGLE", "ELLIPSE", "FRAME", "COMPONENT", "TEXT", "LINE"])
+				.describe("Type of node to create. COMPONENT creates a reusable component definition (like FRAME but reusable)."),
+			properties: jsonObject(z.object({
 					name: z.string().optional().describe("Name for the new node"),
-					x: z.number().optional().describe("X position within parent"),
-					y: z.number().optional().describe("Y position within parent"),
-					width: z.number().optional().describe("Width (default: 100)"),
-					height: z.number().optional().describe("Height (default: 100)"),
-					fills: z
-						.array(
-							z.object({
-								type: z.literal("SOLID"),
-								color: z.string(),
-							}),
-						)
-						.optional()
-						.describe("Fill colors (hex strings)"),
-					text: z
-						.string()
-						.optional()
-						.describe("Text content (for TEXT nodes only)"),
-				})
+					x: z.coerce.number().optional().describe("X position within parent"),
+					y: z.coerce.number().optional().describe("Y position within parent"),
+					width: z.coerce.number().optional().describe("Width (default: 100)"),
+					height: z.coerce.number().optional().describe("Height (default: 100)"),
+					fills: z.array(z.object({ type: z.literal("SOLID"), color: z.string() })).optional()
+						.describe("Fill colors (hex strings like '#FF0000')"),
+					text: z.string().optional().describe("Text content (TEXT nodes only)"),
+					fontSize: z.coerce.number().optional().describe("Font size (TEXT nodes, default: 14)"),
+					fontFamily: z.string().optional().describe("Font family (TEXT nodes, default: 'Inter')"),
+					fontStyle: z.string().optional().describe("Font style (TEXT nodes, default: 'Regular')"),
+					textAutoResize: z.enum(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]).optional()
+						.describe("Text auto-resize mode (TEXT nodes). Auto-set to HEIGHT when layoutSizingHorizontal=FILL"),
+					layoutMode: z.enum(["HORIZONTAL", "VERTICAL", "NONE"]).optional().describe("Auto-layout direction"),
+					itemSpacing: z.coerce.number().optional().describe("Gap between children"),
+					padding: z.coerce.number().optional().describe("Uniform padding (all sides)"),
+					paddingTop: z.coerce.number().optional(),
+					paddingRight: z.coerce.number().optional(),
+					paddingBottom: z.coerce.number().optional(),
+					paddingLeft: z.coerce.number().optional(),
+					primaryAxisSizingMode: z.enum(["FIXED", "AUTO"]).optional().describe("Main axis sizing"),
+					counterAxisSizingMode: z.enum(["FIXED", "AUTO"]).optional().describe("Cross axis sizing"),
+					layoutSizingHorizontal: z.enum(["FIXED", "HUG", "FILL"]).optional(),
+					layoutSizingVertical: z.enum(["FIXED", "HUG", "FILL"]).optional(),
+					cornerRadius: z.coerce.number().optional().describe("Corner radius"),
+					opacity: z.coerce.number().optional().describe("Opacity 0-1"),
+				}))
 				.optional()
 				.describe("Properties for the new node"),
+			children: jsonArray(z.array(z.object({
+					nodeType: z.enum(["RECTANGLE", "ELLIPSE", "FRAME", "COMPONENT", "TEXT", "LINE"]).optional().describe("Child node type"),
+					type: z.enum(["RECTANGLE", "ELLIPSE", "FRAME", "COMPONENT", "TEXT", "LINE"]).optional().describe("Alias for nodeType (Figma-native naming)"),
+					properties: z.record(z.any()).optional().describe("Same properties as parent (name, text, fills, layout, etc.)"),
+					children: z.array(z.any()).optional().describe("Nested children (recursive)"),
+				}).transform(c => ({ ...c, nodeType: c.nodeType ?? c.type }))))
+				.optional()
+				.describe("Nested child nodes to create recursively. Each child can have its own children. Builds the entire tree in one call."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-		async ({ parentId, nodeType, properties }) => {
+		async ({ parentId, nodeType, properties, children }) => {
 			try {
 				const connector = await getDesktopConnector();
-				const result = await connector.createChildNode(
-					parentId,
-					nodeType,
-					properties,
-				);
+				const hasChildren = children && children.length > 0;
 
-				if (!result.success) {
-					throw new Error(result.error || "Failed to create node");
+				if (!hasChildren) {
+					// Flat creation — structured command, fast
+					const result = await connector.createChildNode(parentId, nodeType, properties || {});
+					if (!result.success) throw new Error(result.error || "createChildNode failed");
+					const nodeLine = fmtNode(result.node);
+					return ok(`Created ${nodeType}${properties?.name ? ` "${properties.name}"` : ""}${nodeLine ? `\n  ${nodeLine}` : ""}`);
 				}
 
-				const nodeLine = fmtNode(result.node);
-				return ok(`Created ${nodeType}${properties?.name ? ` "${properties.name}"` : ""}${nodeLine ? `\n  ${nodeLine}` : ""}`);
+				// Tree creation — batched fonts, 30s timeout, partial results on error
+				const treeDef = { nodeType, properties: properties || {}, children };
+				const result = await connector.scaffoldTree(parentId, treeDef);
+				if (!result.success) {
+					let msg = result.error || "scaffoldTree failed";
+					if (result.partialTree) {
+						msg += "\n\nPartial tree created before failure:\n" + JSON.stringify(result.partialTree, null, 2);
+					}
+					throw new Error(msg);
+				}
+
+				let output = JSON.stringify(result.tree, null, 2);
+				if (result.fontErrors && result.fontErrors.length > 0) {
+					output += "\n\nFont warnings: " + result.fontErrors.join("; ");
+				}
+				return ok(output);
 			} catch (error) {
 				logger.error({ error }, "Failed to create child node");
 				return err(
@@ -949,53 +1080,53 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 			counterAxisAlignContent: z.enum(["AUTO", "SPACE_BETWEEN"]).optional().describe("Cross axis content distribution (wrap mode)"),
 			primaryAxisSizingMode: z.enum(["FIXED", "AUTO"]).optional().describe("Main axis sizing"),
 			counterAxisSizingMode: z.enum(["FIXED", "AUTO"]).optional().describe("Cross axis sizing"),
-			padding: z.number().optional().describe("Shorthand: set all 4 padding sides"),
-			paddingTop: z.number().optional(),
-			paddingRight: z.number().optional(),
-			paddingBottom: z.number().optional(),
-			paddingLeft: z.number().optional(),
-			gap: z.number().optional().describe("Shorthand: set itemSpacing + counterAxisSpacing (or grid gaps)"),
-			itemSpacing: z.number().optional().describe("Spacing between items on primary axis"),
-			counterAxisSpacing: z.number().optional().describe("Spacing between items on counter axis (wrap mode)"),
+			padding: z.coerce.number().optional().describe("Shorthand: set all 4 padding sides"),
+			paddingTop: z.coerce.number().optional(),
+			paddingRight: z.coerce.number().optional(),
+			paddingBottom: z.coerce.number().optional(),
+			paddingLeft: z.coerce.number().optional(),
+			gap: z.coerce.number().optional().describe("Shorthand: set itemSpacing + counterAxisSpacing (or grid gaps)"),
+			itemSpacing: z.coerce.number().optional().describe("Spacing between items on primary axis"),
+			counterAxisSpacing: z.coerce.number().optional().describe("Spacing between items on counter axis (wrap mode)"),
 			layoutWrap: z.enum(["NO_WRAP", "WRAP"]).optional().describe("Wrap mode (only for HORIZONTAL)"),
-			itemReverseZIndex: z.boolean().optional().describe("Reverse z-order of children"),
-			strokesIncludedInLayout: z.boolean().optional().describe("Include strokes in layout calculations"),
+			itemReverseZIndex: coerceBool().optional().describe("Reverse z-order of children"),
+			strokesIncludedInLayout: coerceBool().optional().describe("Include strokes in layout calculations"),
 			// Grid container
-			gridColumnCount: z.number().int().positive().optional().describe("Number of grid columns"),
-			gridRowCount: z.number().int().positive().optional().describe("Number of grid rows"),
-			gridColumnSizes: z.array(z.object({ type: z.enum(["FIXED", "FLEX"]), value: z.number() })).optional().describe("Column track sizes"),
-			gridRowSizes: z.array(z.object({ type: z.enum(["FIXED", "FLEX"]), value: z.number() })).optional().describe("Row track sizes"),
-			gridColumnGap: z.number().optional(),
-			gridRowGap: z.number().optional(),
+			gridColumnCount: z.coerce.number().int().positive().optional().describe("Number of grid columns"),
+			gridRowCount: z.coerce.number().int().positive().optional().describe("Number of grid rows"),
+			gridColumnSizes: jsonArray(z.array(z.object({ type: z.enum(["FIXED", "FLEX"]), value: z.coerce.number() }))).optional().describe("Column track sizes"),
+			gridRowSizes: jsonArray(z.array(z.object({ type: z.enum(["FIXED", "FLEX"]), value: z.coerce.number() }))).optional().describe("Row track sizes"),
+			gridColumnGap: z.coerce.number().optional(),
+			gridRowGap: z.coerce.number().optional(),
 			// Child props
 			layoutSizingHorizontal: z.enum(["FIXED", "HUG", "FILL"]).optional().describe("Child horizontal sizing"),
 			layoutSizingVertical: z.enum(["FIXED", "HUG", "FILL"]).optional().describe("Child vertical sizing"),
-			layoutGrow: z.number().optional().describe("Flex grow (0 or 1)"),
+			layoutGrow: z.coerce.number().optional().describe("Flex grow (0 or 1)"),
 			layoutPositioning: z.enum(["AUTO", "ABSOLUTE"]).optional().describe("Auto-layout or absolute positioning"),
 			layoutAlign: z.enum(["AUTO", "STRETCH", "INHERIT"]).optional().describe("Cross-axis alignment override (deprecated, prefer layoutSizingHorizontal/Vertical)"),
-			minWidth: z.number().nullable().optional().describe("Min width constraint (null to remove)"),
-			maxWidth: z.number().nullable().optional().describe("Max width constraint (null to remove)"),
-			minHeight: z.number().nullable().optional().describe("Min height constraint (null to remove)"),
-			maxHeight: z.number().nullable().optional().describe("Max height constraint (null to remove)"),
+			minWidth: z.coerce.number().nullable().optional().describe("Min width constraint (null to remove)"),
+			maxWidth: z.coerce.number().nullable().optional().describe("Max width constraint (null to remove)"),
+			minHeight: z.coerce.number().nullable().optional().describe("Min height constraint (null to remove)"),
+			maxHeight: z.coerce.number().nullable().optional().describe("Max height constraint (null to remove)"),
 			// Constraints (for absolute-positioned children)
 			constraintHorizontal: z.enum(["MIN", "CENTER", "MAX", "STRETCH", "SCALE"]).optional()
 				.describe("Horizontal constraint (absolute children). MIN=left, MAX=right, STRETCH=left+right stretch"),
 			constraintVertical: z.enum(["MIN", "CENTER", "MAX", "STRETCH", "SCALE"]).optional()
 				.describe("Vertical constraint (absolute children). MIN=top, MAX=bottom, STRETCH=top+bottom stretch"),
 			// Grid child
-			gridColumnSpan: z.number().int().positive().optional().describe("Number of columns to span"),
-			gridRowSpan: z.number().int().positive().optional().describe("Number of rows to span"),
-			gridColumnAnchorIndex: z.number().int().optional().describe("Column anchor index"),
-			gridRowAnchorIndex: z.number().int().optional().describe("Row anchor index"),
+			gridColumnSpan: z.coerce.number().int().positive().optional().describe("Number of columns to span"),
+			gridRowSpan: z.coerce.number().int().positive().optional().describe("Number of rows to span"),
+			gridColumnAnchorIndex: z.coerce.number().int().optional().describe("Column anchor index"),
+			gridRowAnchorIndex: z.coerce.number().int().optional().describe("Row anchor index"),
 			gridChildHorizontalAlign: z.enum(["AUTO", "MIN", "CENTER", "MAX"]).optional().describe("Grid child horizontal alignment"),
 			gridChildVerticalAlign: z.enum(["AUTO", "MIN", "CENTER", "MAX"]).optional().describe("Grid child vertical alignment"),
-			variableBindings: z.array(z.object({
+			variableBindings: jsonArray(z.array(z.object({
 				field: z.enum([
 					"paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
 					"itemSpacing", "counterAxisSpacing",
 				]).describe("Layout property to bind"),
 				variableId: z.string().describe("Variable ID. Empty string to unbind."),
-			})).optional().describe("Bind variables to layout spacing properties."),
+			}))).optional().describe("Bind variables to layout spacing properties."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
 		async (params, extra) => {

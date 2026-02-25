@@ -157,12 +157,12 @@ export class TeamLibraryCache {
 		teamId: string,
 		namePattern: string,
 		type: 'component' | 'componentSet' | 'style' | 'all' = 'all',
-	): Array<{ name: string; key: string; description: string; type: string; file_key: string; file_name?: string }> {
+	): Array<{ name: string; key: string; description: string; type: string; file_key: string; file_name?: string; usage?: string }> {
 		const lib = this.memory.get(teamId);
 		if (!lib) return [];
 
 		const pattern = namePattern.toLowerCase();
-		const results: Array<{ name: string; key: string; description: string; type: string; file_key: string; file_name?: string }> = [];
+		const results: Array<{ name: string; key: string; description: string; type: string; file_key: string; file_name?: string; usage?: string }> = [];
 
 		if (type === 'all' || type === 'componentSet') {
 			for (const cs of lib.componentSets) {
@@ -174,6 +174,7 @@ export class TeamLibraryCache {
 						type: 'componentSet',
 						file_key: cs.file_key,
 						file_name: cs.file_name,
+						usage: 'Pass key as componentKey to figma_instantiate_component. Use variant param to pick a specific variant, or omit for default.',
 					});
 				}
 			}

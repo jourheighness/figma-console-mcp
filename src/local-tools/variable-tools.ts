@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { jsonArray, coerceBool } from "../core/schema-coerce.js";
 import { createChildLogger } from "../core/logger.js";
 import { sendProgress } from "../core/progress.js";
 import type { LocalToolDeps } from "./types.js";
@@ -38,7 +39,7 @@ Requires Desktop Bridge plugin. Use figma_get_variables first to get IDs.`,
 				.describe("Collection ID (for create, create_collection, delete_collection, add_mode, rename_mode)"),
 			modeId: z.string().optional()
 				.describe("Mode ID (for update_value, rename_mode)"),
-			value: z.union([z.string(), z.number(), z.boolean()]).optional()
+			value: z.union([z.string(), z.coerce.number(), coerceBool()]).optional()
 				.describe("Value for update_value. COLOR: hex '#FF0000', FLOAT: number, STRING: text, BOOLEAN: true/false"),
 			name: z.string().optional()
 				.describe("Name for create or create_collection"),
@@ -50,11 +51,11 @@ Requires Desktop Bridge plugin. Use figma_get_variables first to get IDs.`,
 				.describe("Variable type (create only)"),
 			description: z.string().optional()
 				.describe("Variable description (create only)"),
-			valuesByMode: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional()
-				.describe("Initial values by mode ID (create only). E.g. { '1:0': '#FF0000' }"),
+			valuesByMode: z.record(z.string(), z.union([z.string(), z.coerce.number(), coerceBool()])).optional()
+				.describe("Initial values by mode ID (create only). Keys are mode IDs (e.g. '1:0'), NOT mode names. Use figma_get_variables to find mode IDs. E.g. { '1:0': '#FF0000' }"),
 			initialModeName: z.string().optional()
 				.describe("Name for initial mode (create_collection only)"),
-			additionalModes: z.array(z.string()).optional()
+			additionalModes: jsonArray(z.array(z.string())).optional()
 				.describe("Additional mode names (create_collection only)"),
 		},
 		{ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -213,42 +214,39 @@ Actions:
 		{
 			action: z.enum(["create", "update", "setup"]).describe("Batch operation type"),
 			collectionId: z.string().optional().describe("Collection ID (required for create)"),
-			variables: z
-				.array(
+			variables: jsonArray(z.array(
 					z.object({
 						name: z.string().describe("Variable name"),
 						resolvedType: z.enum(["COLOR", "FLOAT", "STRING", "BOOLEAN"]).describe("Variable type"),
 						description: z.string().optional(),
-						valuesByMode: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional()
+						valuesByMode: z.record(z.string(), z.union([z.string(), z.coerce.number(), coerceBool()])).optional()
 							.describe("Values by mode ID. COLOR: hex '#FF0000'. Example: { '1:0': '#FF0000' }"),
 					}),
-				)
-				.min(1).max(100).optional()
+				).min(1).max(100))
+				.optional()
 				.describe("Variables to create (for action='create', 1-100)"),
-			updates: z
-				.array(
+			updates: jsonArray(z.array(
 					z.object({
 						variableId: z.string().describe("Variable ID"),
 						modeId: z.string().describe("Mode ID"),
-						value: z.union([z.string(), z.number(), z.boolean()])
+						value: z.union([z.string(), z.coerce.number(), coerceBool()])
 							.describe("New value. COLOR: hex. FLOAT: number. STRING: text. BOOLEAN: true/false."),
 					}),
-				)
-				.min(1).max(100).optional()
+				).min(1).max(100))
+				.optional()
 				.describe("Updates to apply (for action='update', 1-100)"),
 			collectionName: z.string().optional().describe("Name for the new collection (required for setup, e.g., 'Brand Tokens')"),
-			modes: z.array(z.string()).min(1).max(4).optional().describe("Mode names for setup (first becomes default). Example: ['Light', 'Dark']"),
-			tokens: z
-				.array(
+			modes: jsonArray(z.array(z.string()).min(1).max(4)).optional().describe("Mode names for setup (first becomes default). Example: ['Light', 'Dark']"),
+			tokens: jsonArray(z.array(
 					z.object({
 						name: z.string().describe("Token name (e.g., 'color/primary')"),
 						resolvedType: z.enum(["COLOR", "FLOAT", "STRING", "BOOLEAN"]).describe("Token type"),
 						description: z.string().optional().describe("Optional description"),
-						values: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+						values: z.record(z.string(), z.union([z.string(), z.coerce.number(), coerceBool()]))
 							.describe("Values keyed by mode NAME (not ID). Example: { 'Light': '#FFFFFF', 'Dark': '#000000' }"),
 					}),
-				)
-				.min(1).max(100).optional()
+				).min(1).max(100))
+				.optional()
 				.describe("Token definitions for setup (1-100)"),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },

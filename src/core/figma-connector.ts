@@ -72,6 +72,7 @@ export interface IFigmaConnector {
     textCase?: string;
   }): Promise<any>;
   createChildNode(parentId: string, nodeType: string, properties?: any): Promise<any>;
+  scaffoldTree(parentId: string, tree: { nodeType: string; properties?: any; children?: any[] }): Promise<any>;
 
   // Screenshot & instance
   captureScreenshot(nodeId: string, options?: any): Promise<any>;

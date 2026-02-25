@@ -47,7 +47,7 @@ Enable AI coding assistants (Claude Code, Cursor, etc.) to interact with Figma i
 ### Design Manipulation (Desktop Bridge)
 - `figma_edit_node` - Resize, move, clone, delete, rename, reparent, reorder nodes
 - `figma_set_appearance` - Fills, strokes, opacity, corner radius, effects, rotation
-- `figma_create_child` - Add nodes to frames
+- `figma_create_nodes` - Create nodes or entire node trees in frames
 - `figma_set_text` - Text content and typography
 - `figma_set_reaction` - Prototyping interactions
 - Component property management tools

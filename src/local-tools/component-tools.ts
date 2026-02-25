@@ -4,6 +4,7 @@
  */
 
 import { z } from "zod";
+import { jsonArray, jsonObject, coerceBool } from "../core/schema-coerce.js";
 import { extractFileKey } from "../core/figma-api.js";
 import { createChildLogger } from "../core/logger.js";
 import type { LocalToolDeps } from "./types.js";
@@ -11,7 +12,7 @@ import type { LocalToolDeps } from "./types.js";
 const logger = createChildLogger({ component: "component-tools" });
 
 export function registerComponentTools(deps: LocalToolDeps): void {
-	const { server, getFigmaAPI, getCurrentUrl, getDesktopConnector, projectContextCache, teamLibraryCache, teamIds, variablesCache } = deps;
+	const { server, getFigmaAPI, getCurrentUrl, getDesktopConnector, projectContextCache, teamLibraryCache, designSystems, variablesCache } = deps;
 
 	// Helper function to ensure design system cache is loaded (auto-loads if needed)
 	const ensureDesignSystemCache = async (): Promise<{
@@ -171,15 +172,14 @@ Verbosity levels:
 			componentName: z.string().optional().describe("Component name for exact lookup (details verbosity)"),
 			category: z.string().optional().describe("Filter by category (summary verbosity)"),
 			scope: z.enum(["properties", "full"]).optional().default("properties").describe("Details scope: 'properties' (compact) or 'full' (complete spec)"),
-			limit: z.number().optional().default(10).describe("Max results (summary verbosity, max 25)"),
-			offset: z.number().optional().default(0).describe("Pagination offset (summary verbosity)"),
+			limit: z.coerce.number().optional().default(10).describe("Max results (summary verbosity, max 25)"),
+			offset: z.coerce.number().optional().default(0).describe("Pagination offset (summary verbosity)"),
 			fileUrl: z.string().optional().describe("Figma file URL (for keys lookup). Uses current if omitted."),
-			includeVariants: z.boolean().optional().default(false).describe("Include individual variants in keys results"),
-			source: z.enum(["file", "cache", "library"]).optional().default("cache").describe("Data source: 'cache' (project context), 'file' (design system manifest), 'library' (team library)"),
-			forceRefresh: z.boolean().optional().default(false).describe("Force refresh cached data (overview verbosity only — extraction can take minutes for large files)"),
+			includeVariants: coerceBool().optional().default(false).describe("Include individual variants in keys results"),
+			forceRefresh: coerceBool().optional().default(false).describe("Force refresh cached data (overview verbosity only — extraction can take minutes for large files)"),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ query, verbosity, componentKey, componentName, category, scope, limit, offset, fileUrl, includeVariants, source, forceRefresh }) => {
+		async ({ query, verbosity, componentKey, componentName, category, scope, limit, offset, fileUrl, includeVariants, forceRefresh }) => {
 			try {
 				if (verbosity === "overview") {
 					// Compact design system overview — categories, token summary, totals
@@ -471,8 +471,13 @@ Verbosity levels:
 **CRITICAL: Always pass BOTH componentKey AND nodeId together!**
 Search results return both identifiers. Pass both so the tool can automatically fall back to nodeId if the component isn't published to a library. Most local/unpublished components require nodeId.
 
+**COMPONENT SET KEYS:** Both component keys AND componentSet keys work. When passing a componentSet key (from figma_get_library_components), the tool imports the set and picks a variant automatically. Use the \`variant\` param to select a specific variant (e.g., \`{ Type: "Elevated" }\`). Without \`variant\`, the default variant is used.
+
 **IMPORTANT: Always re-search before instantiating!**
 NodeIds are session-specific and may be stale from previous conversations. ALWAYS search for components at the start of each design session to get current, valid identifiers.
+
+**OVERRIDE LIMITATIONS:**
+The overrides param handles TEXT and BOOLEAN properties only. For INSTANCE_SWAP overrides, call figma_set_instance_properties after instantiation.
 
 **VISUAL VALIDATION WORKFLOW:**
 After instantiating components, use figma_screenshot to verify the result looks correct. Check placement, sizing, and visual balance.`,
@@ -496,16 +501,15 @@ After instantiating components, use figma_screenshot to verify the result looks 
 					"Variant properties to set (e.g., { Type: 'Simple', State: 'Active' })",
 				),
 			overrides: z
-				.record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+				.record(z.string(), z.union([z.string(), z.coerce.number(), coerceBool()]))
 				.optional()
 				.describe(
 					"Property overrides (e.g., { 'Button Label': 'Click Me' })",
 				),
-			position: z
-				.object({
-					x: z.number(),
-					y: z.number(),
-				})
+			position: jsonObject(z.object({
+					x: z.coerce.number(),
+					y: z.coerce.number(),
+				}))
 				.optional()
 				.describe("Position on canvas (default: 0, 0)"),
 			parentId: z
@@ -578,10 +582,11 @@ After instantiating components, use figma_screenshot to verify the result looks 
 		},
 	);
 
-	// Tool: Component Property (add/edit/delete/set_description)
+	// Tool: Component Property (list/add/edit/delete/set_description)
 	server.tool(
 		"figma_component_property",
 		`Manage component properties and descriptions. Actions:
+- list: List all properties on a component/instance. For INSTANCE nodes, returns overridable properties (text overrides, component properties, variant props) with current values. For COMPONENT/COMPONENT_SET nodes, returns property definitions.
 - add: Add a new property (BOOLEAN, TEXT, INSTANCE_SWAP, VARIANT). Requires: type, defaultValue.
 - edit: Update name/defaultValue/preferredValues. Requires: newValue object.
 - delete: Remove a property (not VARIANT types). Destructive.
@@ -589,21 +594,21 @@ After instantiating components, use figma_screenshot to verify the result looks 
 
 Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'). Requires Desktop Bridge.`,
 		{
-			action: z.enum(["add", "edit", "delete", "set_description"]).describe("Operation to perform"),
+			action: z.enum(["list", "add", "edit", "delete", "set_description"]).describe("Operation to perform"),
 			nodeId: z.string().describe("Component or component set node ID"),
 			propertyName: z.string().optional().describe("Property name (required for add/edit/delete, with suffix for edit/delete, e.g. 'Show Icon#123:456')"),
 			type: z.enum(["BOOLEAN", "TEXT", "INSTANCE_SWAP", "VARIANT"]).optional()
 				.describe("Property type (add only)"),
-			defaultValue: z.union([z.string(), z.number(), z.boolean()]).optional()
+			defaultValue: z.union([z.string(), z.coerce.number(), coerceBool()]).optional()
 				.describe("Default value (add only)"),
-			newValue: z.object({
+			newValue: jsonObject(z.object({
 				name: z.string().optional().describe("New name for the property"),
-				defaultValue: z.union([z.string(), z.number(), z.boolean()]).optional().describe("New default value"),
+				defaultValue: z.union([z.string(), z.coerce.number(), coerceBool()]).optional().describe("New default value"),
 				preferredValues: z.array(z.object({
 					type: z.enum(["COMPONENT", "COMPONENT_SET"]).describe("Type of preferred value"),
 					key: z.string().describe("Component or component set key"),
 				})).optional().describe("Preferred values (INSTANCE_SWAP only)"),
-			}).optional().describe("Values to update (edit only)"),
+			})).optional().describe("Values to update (edit only)"),
 			description: z.string().optional().describe("Plain text description (set_description only)"),
 			descriptionMarkdown: z.string().optional().describe("Markdown description (set_description only)"),
 		},
@@ -618,6 +623,60 @@ Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'
 				const connector = await getDesktopConnector();
 
 				switch (action) {
+					case "list": {
+						const listResult = await connector.executeCodeViaUI(`
+							var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
+							if (!node) return { success: false, error: 'Node not found: ' + ${JSON.stringify(nodeId)} };
+							var info = { type: node.type, name: node.name, properties: {} };
+
+							if (node.type === 'INSTANCE') {
+								// Instance: show overridable properties with current values
+								if (node.componentProperties) {
+									for (var key of Object.keys(node.componentProperties)) {
+										var prop = node.componentProperties[key];
+										info.properties[key] = { type: prop.type, value: prop.value };
+										if (prop.preferredValues) info.properties[key].preferredValues = prop.preferredValues;
+									}
+								}
+								// Also show text overrides by scanning text children
+								var textOverrides = [];
+								function scanText(n) {
+									if (n.type === 'TEXT') textOverrides.push({ id: n.id, name: n.name, characters: n.characters });
+									if (n.children) n.children.forEach(scanText);
+								}
+								scanText(node);
+								if (textOverrides.length > 0) info.textNodes = textOverrides;
+								// Main component info
+								try {
+									if (node.mainComponent) {
+										info.mainComponent = { id: node.mainComponent.id, name: node.mainComponent.name };
+										if (node.mainComponent.parent && node.mainComponent.parent.type === 'COMPONENT_SET') {
+											info.componentSet = node.mainComponent.parent.name;
+										}
+									}
+								} catch(e) {}
+							} else if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET') {
+								// Component: show property definitions
+								if (node.componentPropertyDefinitions) {
+									for (var key of Object.keys(node.componentPropertyDefinitions)) {
+										var def = node.componentPropertyDefinitions[key];
+										info.properties[key] = { type: def.type, defaultValue: def.defaultValue };
+										if (def.variantOptions) info.properties[key].variantOptions = def.variantOptions;
+										if (def.preferredValues) info.properties[key].preferredValues = def.preferredValues;
+									}
+								}
+							} else {
+								return { success: false, error: 'list works on INSTANCE, COMPONENT, or COMPONENT_SET nodes. Got: ' + node.type };
+							}
+							return { success: true, result: info };
+						`);
+						if (listResult.error) throw new Error(listResult.error);
+						const lr = listResult.result || listResult;
+						const data = lr.result || lr;
+						return {
+							content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+						};
+					}
 					case "add": {
 						if (!propertyName) return errorResponse("add requires propertyName");
 						if (!type || defaultValue === undefined) return errorResponse("add requires type and defaultValue");
@@ -1198,9 +1257,14 @@ return {
 	);
 
 	// Tool: Search team design system library by name (instant, from cache)
+	const dsNames = [...designSystems.keys()];
+	const dsDescription = dsNames.length > 0
+		? `Search a published design system library for components, component sets, and styles by name. Returns matching items with keys for instantiation. Instant lookup from cache — no API call.\n\nConfigured design systems: ${dsNames.map(n => `"${n}"`).join(', ')}. Use the designSystem parameter to target a specific one${dsNames.length === 1 ? ' (defaults to the only configured system)' : ''}.`
+		: "Search a published design system library for components, component sets, and styles by name. Returns matching items with keys for instantiation. Instant lookup from cache — no API call. Requires FIGMA_DESIGN_SYSTEMS env var.";
+
 	server.tool(
 		"figma_get_library_components",
-		"Search the team's published design system library for components, component sets, and styles by name. Returns matching items with keys for instantiation. Instant lookup from cache — no API call. Requires FIGMA_TEAM_ID env var.",
+		dsDescription,
 		{
 			namePattern: z
 				.string()
@@ -1210,23 +1274,48 @@ return {
 				.optional()
 				.default("all")
 				.describe("Filter by type: 'component', 'componentSet', 'style', or 'all' (default)."),
+			designSystem: z
+				.string()
+				.optional()
+				.describe(`Name of the design system to search.${dsNames.length > 0 ? ` Available: ${dsNames.map(n => `"${n}"`).join(', ')}.` : ''}`),
 			teamId: z
 				.string()
 				.optional()
-				.describe("Override team ID. Defaults to FIGMA_TEAM_ID env var."),
+				.describe("Override with a raw team ID (bypasses named design systems)."),
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-		async ({ namePattern, type, teamId: overrideTeamId }) => {
+		async ({ namePattern, type, designSystem: dsName, teamId: overrideTeamId }) => {
 			try {
-				const targetTeamIds = overrideTeamId ? [overrideTeamId] : teamIds;
+				// Resolve target team IDs: explicit teamId > named designSystem > all configured
+				let targetEntries: Array<{ name: string; teamId: string }>;
 
-				if (targetTeamIds.length === 0) {
+				if (overrideTeamId) {
+					targetEntries = [{ name: 'override', teamId: overrideTeamId }];
+				} else if (dsName) {
+					const tid = designSystems.get(dsName);
+					if (!tid) {
+						const available = dsNames.length > 0 ? ` Available: ${dsNames.map(n => `"${n}"`).join(', ')}.` : '';
+						return {
+							content: [{
+								type: "text" as const,
+								text: JSON.stringify({ error: `Design system "${dsName}" not found.${available}` }),
+							}],
+							isError: true,
+						};
+					}
+					targetEntries = [{ name: dsName, teamId: tid }];
+				} else {
+					// Search all configured design systems
+					targetEntries = [...designSystems.entries()].map(([name, teamId]) => ({ name, teamId }));
+				}
+
+				if (targetEntries.length === 0) {
 					return {
 						content: [{
 							type: "text" as const,
 							text: JSON.stringify({
-								error: "No team ID configured. Set the FIGMA_TEAM_ID environment variable to your Figma team ID. " +
-									"Find it in the URL when viewing your team page: https://www.figma.com/files/team/{TEAM_ID}/...",
+								error: "No design systems configured. Set FIGMA_DESIGN_SYSTEMS env var as JSON, e.g. '{\"my-ds\": \"12345\"}'. " +
+									"Find team IDs in the URL: https://www.figma.com/files/team/{TEAM_ID}/...",
 							}),
 						}],
 						isError: true,
@@ -1234,26 +1323,26 @@ return {
 				}
 
 				const api = await getFigmaAPI();
-				const allResults: Array<{ teamId: string; matches: any[] }> = [];
+				const allResults: Array<{ name: string; teamId: string; matches: any[] }> = [];
 
-				for (const tid of targetTeamIds) {
-					// Ensure cache is populated
-					let lib = await teamLibraryCache.get(tid, api);
+				for (const entry of targetEntries) {
+					let lib = await teamLibraryCache.get(entry.teamId, api);
 					if (!lib) {
-						lib = await teamLibraryCache.build(tid, api);
+						lib = await teamLibraryCache.build(entry.teamId, api);
 					}
 
-					const matches = teamLibraryCache.search(tid, namePattern, type as any);
-					allResults.push({ teamId: tid, matches });
+					const matches = teamLibraryCache.search(entry.teamId, namePattern, type as any);
+					allResults.push({ ...entry, matches });
 				}
 
-				// Flatten for single team, nest for multiple
+				// Single design system: flat response
 				if (allResults.length === 1) {
-					const { teamId: tid, matches } = allResults[0];
+					const { name, teamId: tid, matches } = allResults[0];
 					return {
 						content: [{
 							type: "text" as const,
 							text: JSON.stringify({
+								designSystem: name,
 								teamId: tid,
 								pattern: namePattern,
 								type,
@@ -1265,13 +1354,15 @@ return {
 					};
 				}
 
+				// Multiple design systems: nested response
 				return {
 					content: [{
 						type: "text" as const,
 						text: JSON.stringify({
 							pattern: namePattern,
 							type,
-							teams: allResults.map(({ teamId: tid, matches }) => ({
+							designSystems: allResults.map(({ name, teamId: tid, matches }) => ({
+								designSystem: name,
 								teamId: tid,
 								matches: matches.length,
 								results: matches.slice(0, 50),

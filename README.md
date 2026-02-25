@@ -173,7 +173,7 @@ Then follow [Steps 3-4](#step-3-connect-to-figma-desktop) above.
 | Tool | Description |
 |-|-|
 | `figma_edit_node` | Resize, move, clone, delete, rename, reparent, reorder nodes |
-| `figma_create_child` | Create new child nodes (frames, text, shapes) |
+| `figma_create_nodes` | Create new child nodes (frames, text, shapes) |
 | `figma_set_appearance` | Set fills, strokes, opacity, corners, effects, blend modes |
 | `figma_set_text` | Set text content and typography properties |
 | `figma_set_layout` | Configure auto-layout on frames |
@@ -196,16 +196,9 @@ Then follow [Steps 3-4](#step-3-connect-to-figma-desktop) above.
 | `figma_variable_operation` | Create, update, rename, delete variables and collections |
 | `figma_batch_variables` | Batch create/update variables (up to 100 per call) |
 
-### Design-Code Parity
-| Tool | Description |
-|-|-|
-| `figma_check_design_parity` | Compare Figma component specs against code |
-| `figma_generate_component_doc` | Generate component documentation from Figma + code |
-
 ### Utilities
 | Tool | Description |
 |-|-|
-| `figma_comments` | Read and post comments on Figma files |
 | `figma_batch` | Execute multiple API operations in one call |
 
 ---
@@ -261,7 +254,7 @@ Multiple MCP server instances can run simultaneously (e.g., Claude Desktop tabs,
 | Variable | Default | Description |
 |-|-|-|
 | `FIGMA_ACCESS_TOKEN` | — | Figma personal access token (required) |
-| `FIGMA_TEAM_ID` | — | Team ID for library component discovery |
+| `FIGMA_DESIGN_SYSTEMS` | — | Named design systems as JSON: `'{"my-ds": "12345"}'` — enables `figma_get_library_components` |
 | `FIGMA_WS_PORT` | `9223` | Preferred WebSocket port (falls back through 10-port range) |
 | `FIGMA_WS_HOST` | `localhost` | WebSocket bind address (`0.0.0.0` for Docker) |
 | `ENABLE_MCP_APPS` | `false` | Enable interactive MCP Apps |

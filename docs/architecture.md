@@ -213,7 +213,7 @@ sequenceDiagram
     participant F as Figma
 
     U->>A: Create button
-    A->>M: figma_create_child()
+    A->>M: figma_create_nodes()
     M->>B: Send command
     B->>F: createComponent()
     F-->>B: Node created
