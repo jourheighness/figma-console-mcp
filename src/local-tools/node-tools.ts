@@ -10,6 +10,69 @@ import type { LocalToolDeps } from "./types.js";
 
 const logger = createChildLogger({ component: "node-tools" });
 
+/** Convert hex color string to Figma RGB (0-1 range). Handles #RGB, #RGBA, #RRGGBB, #RRGGBBAA. */
+function hexToFigmaRGB(hex: string): { r: number; g: number; b: number; a: number } {
+	hex = hex.replace(/^#/, "");
+	if (!/^[0-9A-Fa-f]+$/.test(hex)) {
+		throw new Error(`Invalid hex color: "${hex}" contains non-hex characters.`);
+	}
+	let r: number, g: number, b: number, a = 1;
+	if (hex.length === 3) {
+		r = parseInt(hex[0] + hex[0], 16) / 255;
+		g = parseInt(hex[1] + hex[1], 16) / 255;
+		b = parseInt(hex[2] + hex[2], 16) / 255;
+	} else if (hex.length === 4) {
+		r = parseInt(hex[0] + hex[0], 16) / 255;
+		g = parseInt(hex[1] + hex[1], 16) / 255;
+		b = parseInt(hex[2] + hex[2], 16) / 255;
+		a = parseInt(hex[3] + hex[3], 16) / 255;
+	} else if (hex.length === 6) {
+		r = parseInt(hex.substring(0, 2), 16) / 255;
+		g = parseInt(hex.substring(2, 4), 16) / 255;
+		b = parseInt(hex.substring(4, 6), 16) / 255;
+	} else if (hex.length === 8) {
+		r = parseInt(hex.substring(0, 2), 16) / 255;
+		g = parseInt(hex.substring(2, 4), 16) / 255;
+		b = parseInt(hex.substring(4, 6), 16) / 255;
+		a = parseInt(hex.substring(6, 8), 16) / 255;
+	} else {
+		throw new Error(`Invalid hex color format: "${hex}". Expected 3, 4, 6, or 8 hex characters.`);
+	}
+	return { r, g, b, a };
+}
+
+/** Pre-process a fills array: convert hex color strings to Figma RGB objects server-side. */
+function preprocessFills(fills: any[]): any[] {
+	return fills.map((fill: any) => {
+		if (fill.type === "SOLID" && typeof fill.color === "string") {
+			const rgb = hexToFigmaRGB(fill.color);
+			return { type: "SOLID", color: { r: rgb.r, g: rgb.g, b: rgb.b }, opacity: rgb.a !== 1 ? rgb.a : (fill.opacity ?? 1) };
+		}
+		if (fill.type?.startsWith("GRADIENT") && fill.gradientStops) {
+			const stops = fill.gradientStops.map((stop: any) => {
+				if (typeof stop.color === "string") {
+					const rgba = hexToFigmaRGB(stop.color);
+					return { position: stop.position, color: { r: rgba.r, g: rgba.g, b: rgba.b, a: rgba.a ?? 1 } };
+				}
+				return stop;
+			});
+			return { type: fill.type, gradientStops: stops, gradientTransform: fill.gradientTransform || [[1,0,0],[0,1,0]], opacity: fill.opacity ?? 1, visible: true };
+		}
+		return fill;
+	});
+}
+
+/** Pre-process a strokes array: convert hex color strings to Figma RGB objects server-side. */
+function preprocessStrokes(strokes: any[]): any[] {
+	return strokes.map((s: any) => {
+		if (s.type === "SOLID" && typeof s.color === "string") {
+			const rgb = hexToFigmaRGB(s.color);
+			return { type: "SOLID", color: { r: rgb.r, g: rgb.g, b: rgb.b }, opacity: rgb.a !== 1 ? rgb.a : (s.opacity ?? 1) };
+		}
+		return s;
+	});
+}
+
 /** Format a node object into a readable summary line */
 function fmtNode(node: any): string {
 	if (!node) return "";
@@ -289,34 +352,15 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 				let needsCodeExec = false;
 
 				if (fills !== undefined) {
-					codeLines.push(`var _rawFills = ${JSON.stringify(fills)};`);
-					codeLines.push(`node.fills = _rawFills.map(function(fill) {
-						if (fill.type === 'SOLID' && typeof fill.color === 'string') {
-							var rgb = hexToFigmaRGB(fill.color);
-							return { type: 'SOLID', color: { r: rgb.r, g: rgb.g, b: rgb.b }, opacity: rgb.a !== undefined ? rgb.a : (fill.opacity !== undefined ? fill.opacity : 1) };
-						}
-						if (fill.type && fill.type.indexOf('GRADIENT') === 0 && fill.gradientStops) {
-							var stops = fill.gradientStops.map(function(stop) {
-								if (typeof stop.color === 'string') { var rgba = hexToFigmaRGB(stop.color); return { position: stop.position, color: { r: rgba.r, g: rgba.g, b: rgba.b, a: rgba.a !== undefined ? rgba.a : 1 } }; }
-								return stop;
-							});
-							return { type: fill.type, gradientStops: stops, gradientTransform: fill.gradientTransform || [[1,0,0],[0,1,0]], opacity: fill.opacity !== undefined ? fill.opacity : 1, visible: true };
-						}
-						return fill;
-					});`);
+					const processedFills = preprocessFills(fills);
+					codeLines.push(`node.fills = ${JSON.stringify(processedFills)};`);
 					applied.push("fills");
 					needsCodeExec = true;
 				}
 
 				if (strokes !== undefined) {
-					codeLines.push(`var _rawStrokes = ${JSON.stringify(strokes)};`);
-					codeLines.push(`node.strokes = _rawStrokes.map(function(s) {
-						if (s.type === 'SOLID' && typeof s.color === 'string') {
-							var rgb = hexToFigmaRGB(s.color);
-							return { type: 'SOLID', color: { r: rgb.r, g: rgb.g, b: rgb.b }, opacity: rgb.a !== undefined ? rgb.a : (s.opacity !== undefined ? s.opacity : 1) };
-						}
-						return s;
-					});`);
+					const processedStrokes = preprocessStrokes(strokes);
+					codeLines.push(`node.strokes = ${JSON.stringify(processedStrokes)};`);
 					if (strokeWeight !== undefined) codeLines.push(`node.strokeWeight = ${strokeWeight};`);
 					applied.push("strokes");
 					needsCodeExec = true;
@@ -874,9 +918,10 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 	// Tool: Set Text Content (with full typography support)
 	server.tool(
 		"figma_set_text",
-		`Set text content and typography on a text node. Supports full font control, alignment, spacing, decoration, and auto-resize.
+		`Set text content and typography on a text node. Supports full font control, alignment, spacing, decoration, auto-resize, and variable bindings for text properties.
 
-Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Italic", etc. — must match an installed font style exactly.`,
+Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Italic", etc. — must match an installed font style exactly.
+Variable bindings: bind fontSize, fontFamily, lineHeight, letterSpacing, etc. to design token variables via variableBindings param.`,
 		{
 			nodeId: z.string().describe("The text node ID"),
 			text: z.string().optional().describe("The new text content (omit to keep existing text and only change styling)"),
@@ -897,9 +942,16 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 			textDecoration: z.enum(["NONE", "UNDERLINE", "STRIKETHROUGH"]).optional().describe("Text decoration"),
 			textCase: z.enum(["ORIGINAL", "UPPER", "LOWER", "TITLE", "SMALL_CAPS", "SMALL_CAPS_FORCED"]).optional().describe("Text case transformation"),
 			textStyleId: z.string().optional().describe("Text style ID to apply (from figma_create_style list). Empty string to detach."),
+			variableBindings: jsonArray(z.array(z.object({
+				field: z.enum([
+					"fontSize", "fontFamily", "fontStyle",
+					"lineHeight", "letterSpacing", "paragraphSpacing", "paragraphIndent",
+				]).describe("Text property to bind"),
+				variableId: z.string().describe("Variable ID (e.g. 'VariableID:123:456'). Empty string to unbind."),
+			}))).optional().describe("Bind variables to text properties. Use figma_get_variables to find variable IDs first."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-		async ({ nodeId, text, fontSize, fontFamily, fontStyle, textAlignHorizontal, textAlignVertical, lineHeight, letterSpacing, textAutoResize, textDecoration, textCase, textStyleId }) => {
+		async ({ nodeId, text, fontSize, fontFamily, fontStyle, textAlignHorizontal, textAlignVertical, lineHeight, letterSpacing, textAutoResize, textDecoration, textCase, textStyleId, variableBindings }) => {
 			try {
 				const connector = await getDesktopConnector();
 				const options: Record<string, any> = {};
@@ -914,6 +966,7 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 				if (textDecoration !== undefined) options.textDecoration = textDecoration;
 				if (textCase !== undefined) options.textCase = textCase;
 				if (textStyleId !== undefined) options.textStyleId = textStyleId;
+				if (variableBindings !== undefined) options.variableBindings = variableBindings;
 
 				const result = await connector.setTextContent(
 					nodeId,
@@ -925,9 +978,10 @@ Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Itali
 					throw new Error(result.error || "Failed to set text");
 				}
 
+				const bindPart = variableBindings?.length ? ` (${variableBindings.length} variable binding${variableBindings.length > 1 ? "s" : ""})` : "";
 				const stylePart = textStyleId !== undefined ? (textStyleId === "" ? " (style detached)" : " + style applied") : "";
 				const nodeLine = fmtNode(result.node);
-				return ok(`Text updated${stylePart}${nodeLine ? `\n  ${nodeLine}` : ""}`);
+				return ok(`Text updated${stylePart}${bindPart}${nodeLine ? `\n  ${nodeLine}` : ""}`);
 			} catch (error) {
 				logger.error({ error }, "Failed to set text content");
 				return err(

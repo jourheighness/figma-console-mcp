@@ -111,7 +111,8 @@ class LocalFigmaConsoleMCP {
 ### Session Start
 1. figma_connection action='navigate' — open a Figma URL or switch files. ALWAYS first.
 2. figma_find_components verbosity='overview' — get design system map (components, tokens, categories).
-3. figma_get_selection — see what the user has selected (WebSocket only). Use instead of asking.
+3. figma_get_selection — see what the user has selected. Use instead of asking.
+4. figma_get_viewport — see what's currently visible in the Figma canvas (viewport bounds, zoom, and nodes in view). Use to understand context without requiring selection.
 
 ### Read Data (start with lowest verbosity, escalate on demand)
 - figma_get_file_data — document tree. Start verbosity='summary' depth=1, then drill into nodeIds.
@@ -128,13 +129,14 @@ class LocalFigmaConsoleMCP {
 
 ### Write: Visual Properties
 - figma_set_appearance — fills, strokes, opacity, cornerRadius, effects, rotation, blendMode.
-- figma_set_text — content + full typography (font, size, alignment, spacing, decoration, case).
+- figma_set_text — content + full typography (font, size, alignment, spacing, decoration, case) + variable bindings for text properties (fontSize, fontFamily, lineHeight, letterSpacing, etc.).
 - figma_set_layout — auto-layout (flexbox) or CSS grid on frames. Padding, gap, alignment, wrap.
 
 ### Write: Components & Instances
 - figma_instantiate_component — create instance. ALWAYS pass both componentKey AND nodeId together.
 - figma_set_instance_properties — update props on instance. NOT direct text editing (fails silently).
 - figma_component_property — action: add | edit | delete | set_description. Manage component props and descriptions.
+- figma_combine_as_variants — combine individual COMPONENT nodes into a COMPONENT_SET (variant group). Requires ≥ 2 components with variant naming ("Property=Value, Property=Value").
 - figma_arrange_component_set — organize variant grid with Figma's native layout.
 
 ### Write: Variables & Tokens

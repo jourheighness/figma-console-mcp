@@ -1465,6 +1465,7 @@ export class FigmaDesktopConnector implements IFigmaConnector {
     textDecoration?: string;
     textCase?: string;
     textStyleId?: string;
+    variableBindings?: Array<{ field: string; variableId: string }>;
   }): Promise<any> {
     logger.info({ nodeId, textLength: text?.length ?? 0 }, 'Setting text content via plugin UI');
 

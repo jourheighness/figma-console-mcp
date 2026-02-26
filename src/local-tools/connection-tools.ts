@@ -996,7 +996,7 @@ Actions:
 		async ({ verbose }) => {
 			try {
 				const wsServer = getWsServer();
-				const selection = wsServer?.getCurrentSelection() ?? null;
+				let selection = wsServer?.getCurrentSelection() ?? null;
 
 				if (!wsServer?.isClientConnected()) {
 					return {
@@ -1009,6 +1009,28 @@ Actions:
 						}],
 						isError: true,
 					};
+				}
+
+				// If cached selection is empty, read directly from plugin
+				// (selectionchange only fires on changes — cache is empty after plugin reload)
+				if (!selection || selection.count === 0) {
+					try {
+						const connector = await getDesktopConnector();
+						const live = await connector.executeCodeViaUI(`
+							var sel = figma.currentPage.selection;
+							var nodes = [];
+							for (var i = 0; i < Math.min(sel.length, 50); i++) {
+								nodes.push({ id: sel[i].id, name: sel[i].name, type: sel[i].type, width: sel[i].width, height: sel[i].height });
+							}
+							return { nodes: nodes, count: sel.length, page: figma.currentPage.name, timestamp: Date.now() };
+						`, 5000);
+						const liveResult = live.result ?? live;
+						if (liveResult.count > 0) {
+							selection = liveResult;
+						}
+					} catch (e) {
+						logger.debug({ error: e instanceof Error ? e.message : String(e) }, "Selection fallback via executeCodeViaUI failed");
+					}
 				}
 
 				if (!selection || selection.count === 0) {
@@ -1086,4 +1108,79 @@ Actions:
 			}
 		},
 	);
+
+	// Tool: Get viewport position and visible nodes
+	server.tool(
+		"figma_get_viewport",
+		`Get the current Figma viewport (visible area) and the nodes within it. Returns viewport bounds, zoom level, and all page-level nodes that intersect the visible area — useful for understanding what the user is looking at without requiring a selection.
+
+Depth controls how deep into the tree to report children of in-view nodes (0 = top-level only, 1 = include direct children, etc.). Use depth 0 for orientation, depth 1 for structure.`,
+		{
+			depth: z.coerce.number().optional().default(0).describe("How many levels of children to include for in-view nodes (default: 0, top-level only)"),
+		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		async ({ depth }) => {
+			try {
+				const connector = await getDesktopConnector();
+				const maxDepth = Math.min(depth ?? 0, 3); // Cap at 3 to avoid huge responses
+
+				const raw = await connector.executeCodeViaUI(`
+var vp = figma.viewport;
+var bounds = vp.bounds;
+var page = figma.currentPage;
+
+function intersects(node) {
+	return node.x + node.width > bounds.x &&
+		node.x < bounds.x + bounds.width &&
+		node.y + node.height > bounds.y &&
+		node.y < bounds.y + bounds.height;
+}
+
+function summarize(node, d, maxD) {
+	var info = { id: node.id, name: node.name, type: node.type, x: Math.round(node.x), y: Math.round(node.y), width: Math.round(node.width), height: Math.round(node.height) };
+	if ('characters' in node && node.type === 'TEXT') info.characters = node.characters.substring(0, 80);
+	if (d < maxD && 'children' in node && node.children.length > 0) {
+		info.children = [];
+		for (var c = 0; c < Math.min(node.children.length, 50); c++) {
+			info.children.push(summarize(node.children[c], d + 1, maxD));
+		}
+		if (node.children.length > 50) info.childrenTruncated = node.children.length;
+	}
+	return info;
+}
+
+var inView = [];
+for (var i = 0; i < page.children.length; i++) {
+	var child = page.children[i];
+	if (intersects(child)) {
+		inView.push(summarize(child, 0, ${maxDepth}));
+	}
+}
+
+return {
+	viewport: { x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height), zoom: Math.round(vp.zoom * 100) / 100 },
+	page: page.name,
+	nodesInView: inView,
+	totalInView: inView.length,
+	totalOnPage: page.children.length
+};
+				`, 10000);
+
+				const result = raw.result ?? raw;
+				if (result.error) throw new Error(result.error);
+
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify(result) }],
+				};
+			} catch (error) {
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify({
+						error: error instanceof Error ? error.message : String(error),
+					}) }],
+					isError: true,
+				};
+			}
+		},
+	);
+
 }

@@ -262,10 +262,11 @@ export class WebSocketConnector implements IFigmaConnector {
     textAutoResize?: string;
     textDecoration?: string;
     textCase?: string;
+    variableBindings?: Array<{ field: string; variableId: string }>;
   }): Promise<any> {
     const params: any = { nodeId, text: characters };
     if (options) {
-      const passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase'] as const;
+      const passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'variableBindings'] as const;
       for (const key of passthrough) {
         if ((options as any)[key] !== undefined) params[key] = (options as any)[key];
       }

@@ -1959,6 +1959,20 @@ figma.ui.onmessage = async (msg) => {
         await node.setTextStyleIdAsync(msg.textStyleId);
       }
 
+      // Apply variable bindings to text properties (fontSize, fontFamily, lineHeight, etc.)
+      if (msg.variableBindings && msg.variableBindings.length > 0) {
+        for (var bi = 0; bi < msg.variableBindings.length; bi++) {
+          var binding = msg.variableBindings[bi];
+          if (binding.variableId === '') {
+            node.setBoundVariable(binding.field, null);
+          } else {
+            var bVar = await figma.variables.getVariableByIdAsync(binding.variableId);
+            if (!bVar) throw new Error('Variable not found: ' + binding.variableId);
+            node.setBoundVariable(binding.field, bVar);
+          }
+        }
+      }
+
       if (DEBUG) console.log('🌉 [Desktop Bridge] Text content set');
 
       figma.ui.postMessage({

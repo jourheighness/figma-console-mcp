@@ -1,6 +1,6 @@
 /**
  * Component and design system tools — find_components, instantiate_component,
- * component_property, arrange_component_set, get_library_components.
+ * component_property, arrange_component_set, combine_as_variants, get_library_components.
  */
 
 import { z } from "zod";
@@ -1379,4 +1379,108 @@ return {
 			}
 		},
 	);
+
+	// Tool: Combine Components as Variants
+	server.tool(
+		"figma_combine_as_variants",
+		`Combine individual COMPONENT nodes into a COMPONENT_SET (variant group). This is the Figma equivalent of "Combine as Variants" from the right-click menu.
+
+Each component MUST have a name following the variant naming convention: "Property1=Value1, Property2=Value2" (e.g. "Size=Small, State=Default"). Figma parses these names to create the variant properties.
+
+Steps:
+1. Create individual COMPONENT nodes with figma_create_nodes (use nodeType: "COMPONENT")
+2. Name each component with variant property syntax (e.g. "Size=Small, State=Default")
+3. Call this tool with all component IDs to combine them into a COMPONENT_SET
+
+The resulting COMPONENT_SET gets Figma's native purple dashed border and proper variant property definitions.`,
+		{
+			componentIds: jsonArray(z.array(z.string().describe("Node ID of a COMPONENT to include"))).describe("Array of COMPONENT node IDs to combine. Must be ≥ 2 components."),
+			name: z.string().optional().describe("Name for the component set (default: derived from first component name, stripping variant suffixes)"),
+		},
+		{ readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+		async ({ componentIds, name }) => {
+			try {
+				const connector = await getDesktopConnector();
+
+				if (componentIds.length < 2) {
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify({ error: "Need at least 2 components to combine as variants.", hint: "Create multiple COMPONENT nodes first with figma_create_nodes, then combine them." }) }],
+						isError: true,
+					};
+				}
+
+				const idsJson = JSON.stringify(componentIds);
+				const nameJson = name ? JSON.stringify(name) : "null";
+
+				const code = `
+var ids = ${idsJson};
+var setName = ${nameJson};
+var components = [];
+for (var i = 0; i < ids.length; i++) {
+	var node = await figma.getNodeByIdAsync(ids[i]);
+	if (!node) return { error: 'Node not found: ' + ids[i] };
+	if (node.type !== 'COMPONENT') return { error: 'Node ' + ids[i] + ' is type ' + node.type + ', expected COMPONENT' };
+	components.push(node);
+}
+
+// All components must share the same parent
+var parent = components[0].parent;
+var componentSet = figma.combineAsVariants(components, parent);
+
+if (setName) {
+	componentSet.name = setName;
+}
+
+// Apply Figma's native purple dashed border
+componentSet.strokes = [{
+	type: 'SOLID',
+	color: { r: 151/255, g: 71/255, b: 255/255 }
+}];
+componentSet.dashPattern = [10, 5];
+componentSet.strokeWeight = 1;
+componentSet.strokeAlign = "INSIDE";
+
+// Collect variant info
+var variantNames = [];
+for (var v = 0; v < componentSet.children.length; v++) {
+	if (componentSet.children[v].type === 'COMPONENT') {
+		variantNames.push(componentSet.children[v].name);
+	}
+}
+
+return {
+	success: true,
+	id: componentSet.id,
+	name: componentSet.name,
+	variantCount: variantNames.length,
+	variants: variantNames
+};`;
+
+				const raw = await connector.executeCodeViaUI(code, 10000);
+				// executeCodeViaUI wraps in { success, result } envelope
+				const result = raw.result ?? raw;
+
+				if (result.error) {
+					throw new Error(result.error);
+				}
+
+				const variants: string[] = result.variants ?? [];
+				const lines = [`Combined ${result.variantCount ?? variants.length} components into COMPONENT_SET "${result.name}" (${result.id})`];
+				for (const v of variants) {
+					lines.push(`  ${v}`);
+				}
+				return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+			} catch (error) {
+				logger.error({ error }, "Failed to combine as variants");
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify({
+						error: error instanceof Error ? error.message : String(error),
+						hint: "Ensure all IDs are COMPONENT nodes (not FRAME/INSTANCE). Each component name should follow variant syntax: 'Property=Value, Property=Value'.",
+					}) }],
+					isError: true,
+				};
+			}
+		},
+	);
+
 }

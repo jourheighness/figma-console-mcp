@@ -549,7 +549,7 @@
     window.setTextContent = (nodeId, text, options) => {
       var params = { nodeId: nodeId, text: text };
       if (options) {
-        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'textStyleId'];
+        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'textStyleId', 'variableBindings'];
         for (var i = 0; i < passthrough.length; i++) {
           if (options[passthrough[i]] !== undefined) params[passthrough[i]] = options[passthrough[i]];
         }
