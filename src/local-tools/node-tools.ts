@@ -1039,6 +1039,12 @@ Full tree (card with header + body):
     ]}
   ]
 
+Smart defaults (override by setting the property explicitly):
+- Auto-layout frames HUG content on both axes (primaryAxisSizingMode/counterAxisSizingMode = AUTO).
+- Text auto-sizes to content. Inside auto-layout: FILL horizontal + HUG vertical (wraps to parent width).
+- Child auto-layout frames inside auto-layout: HUG both axes.
+- You usually don't need to set width/height on auto-layout frames — they size to content.
+
 Coordinates: x/y are always relative to the parent node (not absolute page position). For section parents, this means absolute_x = section.x + child.x.
 
 On partial failure (e.g. bad child type mid-tree), returns what was created before the error.`,

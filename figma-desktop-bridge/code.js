@@ -388,10 +388,49 @@ function applyNodeProperties(node, props, nodeType) {
       node.textAutoResize = props.textAutoResize;
     } else if (props.layoutSizingHorizontal === 'FILL') {
       node.textAutoResize = 'HEIGHT';
+    } else if (!props.width && !props.layoutSizingHorizontal) {
+      // Default: text nodes without explicit width should auto-size to content
+      // WIDTH_AND_HEIGHT = hug both axes (no fixed box to squish into)
+      node.textAutoResize = 'WIDTH_AND_HEIGHT';
     }
   }
 
-  // 9. Sizing modes (must come after layoutMode and textAutoResize)
+  // 9. Smart defaults for auto-layout frames — apply BEFORE explicit overrides
+  //    These ensure frames hug their content unless the caller specifies otherwise.
+  var isAutoLayout = node.layoutMode && node.layoutMode !== 'NONE';
+  if (isAutoLayout) {
+    // Default: frame hugs content on both axes (like Figma UI "Add auto layout")
+    // primaryAxisSizingMode: AUTO = hug along layout direction
+    // counterAxisSizingMode: AUTO = hug perpendicular to layout direction
+    if (props.primaryAxisSizingMode === undefined && props.width === undefined) {
+      node.primaryAxisSizingMode = 'AUTO';
+    }
+    if (props.counterAxisSizingMode === undefined && props.height === undefined) {
+      node.counterAxisSizingMode = 'AUTO';
+    }
+  }
+
+  // 10. Smart child defaults inside auto-layout parents
+  //     Figma defaults children to FIXED, but that squishes content.
+  var parentIsAutoLayout = node.parent && node.parent.layoutMode && node.parent.layoutMode !== 'NONE';
+  if (parentIsAutoLayout) {
+    var isHorizontalLayout = node.parent.layoutMode === 'HORIZONTAL';
+    // Text in auto-layout: FILL horizontal (wraps to parent) + HUG vertical
+    if (nodeType === 'TEXT') {
+      if (!props.layoutSizingHorizontal && !props.width) {
+        node.layoutSizingHorizontal = 'FILL';
+        if (!props.textAutoResize) node.textAutoResize = 'HEIGHT';
+      }
+      if (!props.layoutSizingVertical) node.layoutSizingVertical = 'HUG';
+    }
+    // Child frames with auto-layout: HUG both axes (don't squish nested layouts)
+    else if (isAutoLayout && (nodeType === 'FRAME' || nodeType === 'COMPONENT')) {
+      if (!props.layoutSizingHorizontal && !props.width) node.layoutSizingHorizontal = 'HUG';
+      if (!props.layoutSizingVertical && !props.height) node.layoutSizingVertical = 'HUG';
+    }
+  }
+
+  // 11. Sizing modes — explicit overrides (must come after layoutMode and textAutoResize)
   if (props.primaryAxisSizingMode) node.primaryAxisSizingMode = props.primaryAxisSizingMode;
   if (props.counterAxisSizingMode) node.counterAxisSizingMode = props.counterAxisSizingMode;
   if (props.layoutSizingHorizontal) node.layoutSizingHorizontal = props.layoutSizingHorizontal;

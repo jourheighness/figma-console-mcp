@@ -192,10 +192,14 @@ These cached resources provide instant project context — read them first to av
 - Style keys from the library work DIRECTLY as fillStyleId/textStyleId/effectStyleId — the plugin resolves keys internally.
 - DO NOT inspect random nodes to discover colors/fonts/tokens. The caches above have everything indexed.
 
-### Figma Layout Rules (the API does NOT auto-fix layout)
-- Children in auto-layout default to FIXED sizing. Set layoutSizingHorizontal/Vertical explicitly via figma_set_layout.
-- TEXT in auto-layout: use layoutSizingHorizontal='FILL' to wrap text to parent width (textAutoResize is auto-applied).
-- TEXT without auto-layout parent: set explicit width instead.
+### Figma Layout Rules
+- Smart defaults are applied automatically when creating nodes:
+  - Auto-layout frames HUG content on both axes by default (like Figma's "Add auto layout").
+  - Text nodes auto-size to content (WIDTH_AND_HEIGHT) unless width is set.
+  - Text inside auto-layout: defaults to FILL horizontal + HUG vertical (wraps to parent width).
+  - Child auto-layout frames inside auto-layout: HUG both axes (don't squish nested layouts).
+  - Override any default by setting the property explicitly.
+- These defaults only apply to figma_create_nodes/scaffolding. For existing nodes, set sizing explicitly via figma_set_layout.
 - GRID: children all stack at cell (0,0) by default. You MUST set gridColumnAnchorIndex + gridRowAnchorIndex on EACH child via figma_set_layout.
 - Creating a frame does NOT make it auto-layout. Set layoutMode explicitly.
 - Coordinates (x, y) are parent-relative. Section parents offset from page origin.
