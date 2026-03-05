@@ -501,7 +501,7 @@ After instantiating components, use figma_screenshot to verify the result looks 
 					"Variant properties to set (e.g., { Type: 'Simple', State: 'Active' })",
 				),
 			overrides: z
-				.record(z.string(), z.union([z.string(), z.coerce.number(), coerceBool()]))
+				.record(z.string(), z.union([coerceBool(), z.coerce.number(), z.string()]))
 				.optional()
 				.describe(
 					"Property overrides (e.g., { 'Button Label': 'Click Me' })",
@@ -600,13 +600,13 @@ Use the full property name with suffix for edit/delete/wire (e.g. 'Show Icon#123
 			propertyName: z.string().optional().describe("Property name (required for add/edit/delete/wire, with suffix for edit/delete/wire, e.g. 'Show Icon#123:456')"),
 			type: z.enum(["BOOLEAN", "TEXT", "INSTANCE_SWAP", "VARIANT"]).optional()
 				.describe("Property type (add only)"),
-			defaultValue: z.union([z.string(), z.coerce.number(), coerceBool()]).optional()
+			defaultValue: z.union([coerceBool(), z.coerce.number(), z.string()]).optional()
 				.describe("Default value (add only)"),
 			targetNodeId: z.string().optional().describe("Wire the property to this node. For add: auto-wires after creation. For wire: the target layer node ID. For TEXT properties, pass the text layer's node ID to connect it."),
 			targetProperty: z.string().optional().describe("Which property to wire on the target node (default: 'characters' for text layers). Other options: 'visible' for boolean, 'mainComponent' for instance swap."),
 			newValue: jsonObject(z.object({
 				name: z.string().optional().describe("New name for the property"),
-				defaultValue: z.union([z.string(), z.coerce.number(), coerceBool()]).optional().describe("New default value"),
+				defaultValue: z.union([coerceBool(), z.coerce.number(), z.string()]).optional().describe("New default value"),
 				preferredValues: z.array(z.object({
 					type: z.enum(["COMPONENT", "COMPONENT_SET"]).describe("Type of preferred value"),
 					key: z.string().describe("Component or component set key"),
