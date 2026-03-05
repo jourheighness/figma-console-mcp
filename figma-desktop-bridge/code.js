@@ -309,11 +309,12 @@ function collectFonts(treeDef) {
  * Create a Figma node by type. Returns the node (not yet appended to parent).
  */
 function createNodeByType(nodeType) {
+  var node;
   switch (nodeType) {
     case 'RECTANGLE': return figma.createRectangle();
     case 'ELLIPSE':   return figma.createEllipse();
-    case 'FRAME':     return figma.createFrame();
-    case 'COMPONENT': return figma.createComponent();
+    case 'FRAME':     node = figma.createFrame(); node.clipsContent = true; return node;
+    case 'COMPONENT': node = figma.createComponent(); node.clipsContent = true; return node;
     case 'TEXT':      return figma.createText();
     case 'LINE':      return figma.createLine();
     case 'POLYGON':   return figma.createPolygon();
@@ -367,9 +368,10 @@ function applyNodeProperties(node, props, nodeType) {
     });
   }
 
-  // 7. Opacity & corner radius
+  // 7. Opacity, corner radius, clip content
   if (props.opacity !== undefined) node.opacity = props.opacity;
   if (props.cornerRadius !== undefined) node.cornerRadius = props.cornerRadius;
+  if (props.clipsContent !== undefined) node.clipsContent = props.clipsContent;
 
   // 8. Text properties (fonts already pre-loaded) — must come before layoutSizing
   //    because textAutoResize must be set before layoutSizingHorizontal="FILL"
@@ -1397,12 +1399,29 @@ figma.ui.onmessage = async (msg) => {
       var propertyNameWithId = node.addComponentProperty(msg.propertyName, msg.propertyType, msg.defaultValue, options);
 
       if (DEBUG) console.log('🌉 [Desktop Bridge] Property added:', propertyNameWithId);
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Property added:', propertyNameWithId);
+
+      // Auto-wire to target node if specified
+      var wiredTo = undefined;
+      if (msg.targetNodeId) {
+        var targetProp = msg.targetProperty || 'characters';
+        var targetNode = await figma.getNodeByIdAsync(msg.targetNodeId);
+        if (!targetNode) {
+          throw new Error('Target node not found: ' + msg.targetNodeId);
+        }
+        var refs = JSON.parse(JSON.stringify(targetNode.componentPropertyReferences || {}));
+        refs[targetProp] = propertyNameWithId;
+        targetNode.componentPropertyReferences = refs;
+        wiredTo = { nodeId: msg.targetNodeId, property: targetProp };
+        if (DEBUG) console.log('🌉 [Desktop Bridge] Auto-wired property to', msg.targetNodeId, targetProp);
+      }
 
       figma.ui.postMessage({
         type: 'ADD_COMPONENT_PROPERTY_RESULT',
         requestId: msg.requestId,
         success: true,
-        propertyName: propertyNameWithId
+        propertyName: propertyNameWithId,
+        wiredTo: wiredTo
       });
 
     } catch (error) {
@@ -1470,6 +1489,36 @@ figma.ui.onmessage = async (msg) => {
 
     } catch (error) {
       postError('DELETE_COMPONENT_PROPERTY', msg.requestId, error);
+    }
+  }
+
+
+  // ============================================================================
+  // WIRE_COMPONENT_PROPERTY - Connect component property to a layer's property reference
+  // ============================================================================
+  else if (msg.type === 'WIRE_COMPONENT_PROPERTY') {
+    try {
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Wiring component property:', msg.propertyName, 'to', msg.targetNodeId);
+
+      var targetNode = await figma.getNodeByIdAsync(msg.targetNodeId);
+      if (!targetNode) {
+        throw new Error('Target node not found: ' + msg.targetNodeId);
+      }
+
+      var targetProp = msg.targetProperty || 'characters';
+      var refs = JSON.parse(JSON.stringify(targetNode.componentPropertyReferences || {}));
+      refs[targetProp] = msg.propertyName;
+      targetNode.componentPropertyReferences = refs;
+
+      figma.ui.postMessage({
+        type: 'WIRE_COMPONENT_PROPERTY_RESULT',
+        requestId: msg.requestId,
+        success: true,
+        wiredTo: { nodeId: msg.targetNodeId, property: targetProp, propertyName: msg.propertyName }
+      });
+
+    } catch (error) {
+      postError('WIRE_COMPONENT_PROPERTY', msg.requestId, error);
     }
   }
 
@@ -1973,7 +2022,55 @@ figma.ui.onmessage = async (msg) => {
         }
       }
 
-      if (DEBUG) console.log('🌉 [Desktop Bridge] Text content set');
+      // Apply hyperlinks to character ranges (must happen after text content is set)
+      var hyperlinksApplied = 0;
+      var hyperlinksFailed = [];
+      if (msg.hyperlinks && msg.hyperlinks.length > 0) {
+        var textLen = node.characters.length;
+        for (var hi = 0; hi < msg.hyperlinks.length; hi++) {
+          var link = msg.hyperlinks[hi];
+          if (link.start < 0 || link.end > textLen || link.start >= link.end) {
+            throw new Error('Hyperlink range [' + link.start + ', ' + link.end + ') is out of bounds (text length: ' + textLen + ')');
+          }
+          // Load ALL fonts in the range (required before setRangeHyperlink)
+          // Must handle mixed fonts by loading each character's font individually
+          var rangeFont = node.getRangeFontName(link.start, link.end);
+          if (rangeFont === figma.mixed) {
+            // Mixed fonts in range — load each unique font
+            var loadedFonts = {};
+            for (var ci = link.start; ci < link.end; ci++) {
+              var charFont = node.getRangeFontName(ci, ci + 1);
+              if (charFont !== figma.mixed) {
+                var fontKey = charFont.family + '/' + charFont.style;
+                if (!loadedFonts[fontKey]) {
+                  await figma.loadFontAsync(charFont);
+                  loadedFonts[fontKey] = true;
+                }
+              }
+            }
+          } else {
+            await figma.loadFontAsync(rangeFont);
+          }
+          var hyperlinkObj;
+          if (link.type === 'URL') {
+            hyperlinkObj = { type: 'URL', value: link.value };
+          } else if (link.type === 'NODE') {
+            hyperlinkObj = { type: 'NODE', value: link.value };
+          } else {
+            throw new Error('Unsupported hyperlink type: ' + link.type + '. Use "URL" or "NODE".');
+          }
+          node.setRangeHyperlink(link.start, link.end, hyperlinkObj);
+          // Verify the hyperlink actually took effect by reading it back
+          var verifyLink = node.getRangeHyperlink(link.start, link.end);
+          if (verifyLink && verifyLink !== figma.mixed) {
+            hyperlinksApplied++;
+          } else {
+            hyperlinksFailed.push({ start: link.start, end: link.end, type: link.type, readBack: verifyLink === figma.mixed ? 'mixed' : String(verifyLink) });
+          }
+        }
+      }
+
+      if (DEBUG) console.log('🌉 [Desktop Bridge] Text content set' + (hyperlinksApplied ? ' (' + hyperlinksApplied + ' hyperlinks)' : ''));
 
       figma.ui.postMessage({
         type: 'SET_TEXT_CONTENT_RESULT',
@@ -1986,7 +2083,9 @@ figma.ui.onmessage = async (msg) => {
           fontName: node.fontName,
           fontSize: node.fontSize,
           textAlignHorizontal: node.textAlignHorizontal,
-          textAlignVertical: node.textAlignVertical
+          textAlignVertical: node.textAlignVertical,
+          hyperlinksApplied: hyperlinksApplied,
+          hyperlinksFailed: hyperlinksFailed && hyperlinksFailed.length > 0 ? hyperlinksFailed : undefined
         }
       });
 
@@ -2344,6 +2443,382 @@ figma.ui.onmessage = async (msg) => {
 
     } catch (error) {
       postError('SET_INSTANCE_PROPERTIES', msg.requestId, error);
+    }
+  }
+
+
+  // ============================================================================
+  // GET_LOCAL_STYLES - Get all styles available in the file (including library styles)
+  // ============================================================================
+  else if (msg.type === 'GET_LOCAL_STYLES') {
+    try {
+      var paintStyles = await figma.getLocalPaintStylesAsync();
+      var textStyles = await figma.getLocalTextStylesAsync();
+      var effectStyles = await figma.getLocalEffectStylesAsync();
+      var gridStyles = await figma.getLocalGridStylesAsync();
+
+      var serializeStyle = function(style, styleType) {
+        var s = {
+          id: style.id,
+          name: style.name,
+          type: styleType,
+          description: style.description || '',
+          remote: style.remote || false,
+        };
+        if (style.key) s.key = style.key;
+        return s;
+      };
+
+      var styles = [];
+      for (var i = 0; i < paintStyles.length; i++) styles.push(serializeStyle(paintStyles[i], 'FILL'));
+      for (var i = 0; i < textStyles.length; i++) styles.push(serializeStyle(textStyles[i], 'TEXT'));
+      for (var i = 0; i < effectStyles.length; i++) styles.push(serializeStyle(effectStyles[i], 'EFFECT'));
+      for (var i = 0; i < gridStyles.length; i++) styles.push(serializeStyle(gridStyles[i], 'GRID'));
+
+      figma.ui.postMessage({
+        type: 'GET_LOCAL_STYLES_RESULT',
+        requestId: msg.requestId,
+        success: true,
+        data: styles
+      });
+    } catch (error) {
+      postError('GET_LOCAL_STYLES', msg.requestId, error);
+    }
+  }
+
+  // ============================================================================
+  // INSPECT_NODE - Deep node inspection with data stripping and variable resolution
+  // Returns structure, visuals, layout, text, component info, variable bindings
+  // ============================================================================
+  else if (msg.type === 'INSPECT_NODE') {
+    try {
+      var targetId = msg.nodeId;
+      var maxDepth = typeof msg.depth === 'number' ? Math.min(msg.depth, 3) : 1;
+
+      // If no nodeId, fall back to current selection
+      var otherSelected = null;
+      if (!targetId) {
+        var sel = figma.currentPage.selection;
+        if (!sel || sel.length === 0) {
+          throw new Error('No nodeId provided and nothing selected. Select a node in Figma or pass nodeId.');
+        }
+        targetId = sel[0].id;
+        // Capture other selected nodes for multi-selection awareness
+        if (sel.length > 1) {
+          otherSelected = [];
+          for (var si = 1; si < Math.min(sel.length, 50); si++) {
+            otherSelected.push({ id: sel[si].id, name: sel[si].name, type: sel[si].type });
+          }
+        }
+      }
+
+      var rootNode = await figma.getNodeByIdAsync(targetId);
+      if (!rootNode) {
+        throw new Error('Node not found: ' + targetId);
+      }
+
+      // Caches for variable resolution to avoid redundant async API calls
+      var varCache = {};      // variableId -> resolved name string
+      var colCache = {};      // collectionId -> collection name string
+
+      // Timeout helper: races a promise against a timer
+      function withTimeout(promise, ms, fallback) {
+        return Promise.race([
+          promise,
+          new Promise(function(resolve) { setTimeout(function() { resolve(fallback); }, ms); })
+        ]);
+      }
+
+      // Helper: resolve variable binding to "collection/variable-name"
+      async function resolveVarBinding(binding) {
+        if (!binding || !binding.id) return null;
+        try {
+          if (varCache[binding.id] !== undefined) return varCache[binding.id];
+          var v = await figma.variables.getVariableByIdAsync(binding.id);
+          if (!v) { varCache[binding.id] = binding.id; return binding.id; }
+          var colName;
+          if (colCache[v.variableCollectionId] !== undefined) {
+            colName = colCache[v.variableCollectionId];
+          } else {
+            var col = await figma.variables.getVariableCollectionByIdAsync(v.variableCollectionId);
+            colName = col ? col.name : '?';
+            colCache[v.variableCollectionId] = colName;
+          }
+          var result = colName + '/' + v.name;
+          varCache[binding.id] = result;
+          return result;
+        } catch (e) {
+          varCache[binding.id] = binding.id;
+          return binding.id; // fallback
+        }
+      }
+
+      // Helper: resolve all variable bindings on a node
+      async function resolveVarBindings(node) {
+        if (!node.boundVariables) return undefined;
+        var vars = {};
+        var bv = node.boundVariables;
+        for (var prop in bv) {
+          if (!bv.hasOwnProperty(prop)) continue;
+          var binding = bv[prop];
+          // Some bindings are arrays (e.g., fills)
+          if (Array.isArray(binding)) {
+            if (binding.length > 0 && binding[0] && binding[0].id) {
+              var resolved = await resolveVarBinding(binding[0]);
+              if (resolved) vars[prop] = resolved;
+            }
+          } else {
+            var resolved = await resolveVarBinding(binding);
+            if (resolved) vars[prop] = resolved;
+          }
+        }
+        return Object.keys(vars).length > 0 ? vars : undefined;
+      }
+
+      // Helper: serialize a paint to stripped form
+      function serializePaint(paint) {
+        if (!paint.visible && paint.visible !== undefined) return null; // skip invisible
+        var p = { type: paint.type };
+        if (paint.type === 'SOLID' && paint.color) {
+          var r = Math.round(paint.color.r * 255);
+          var g = Math.round(paint.color.g * 255);
+          var b = Math.round(paint.color.b * 255);
+          p.hex = '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+          if (typeof paint.opacity === 'number' && paint.opacity !== 1) p.opacity = Math.round(paint.opacity * 100) / 100;
+        }
+        return p;
+      }
+
+      // Helper: serialize an effect to stripped form
+      function serializeEffect(effect) {
+        if (!effect.visible) return null;
+        var e = { type: effect.type };
+        if (typeof effect.radius === 'number') e.radius = Math.round(effect.radius);
+        return e;
+      }
+
+      // Sync-only node serializer for children (no async calls = fast)
+      function inspectNodeSync(node, depth) {
+        var o = {
+          id: node.id,
+          name: node.name,
+          type: node.type
+        };
+
+        if (typeof node.width === 'number') o.w = Math.round(node.width);
+        if (typeof node.height === 'number') o.h = Math.round(node.height);
+
+        if (node.absoluteBoundingBox) {
+          o.abs = { x: Math.round(node.absoluteBoundingBox.x), y: Math.round(node.absoluteBoundingBox.y) };
+        } else if (node.absoluteTransform) {
+          o.abs = { x: Math.round(node.absoluteTransform[0][2]), y: Math.round(node.absoluteTransform[1][2]) };
+        }
+
+        if (node.visible === false) o.visible = false;
+        if (node.locked === true) o.locked = true;
+        if (typeof node.opacity === 'number' && node.opacity !== 1) o.opacity = Math.round(node.opacity * 100) / 100;
+        if (typeof node.rotation === 'number' && node.rotation !== 0) o.rotation = Math.round(node.rotation * 10) / 10;
+        if (node.blendMode && node.blendMode !== 'PASS_THROUGH' && node.blendMode !== 'NORMAL') o.blendMode = node.blendMode;
+
+        if (node.fills && node.fills !== figma.mixed && node.fills.length > 0) {
+          var fills = [];
+          for (var i = 0; i < node.fills.length; i++) { var f = serializePaint(node.fills[i]); if (f) fills.push(f); }
+          if (fills.length > 0) o.fills = fills;
+        }
+
+        if (node.strokes && node.strokes.length > 0) {
+          var strokes = [];
+          for (var i = 0; i < node.strokes.length; i++) { var s = serializePaint(node.strokes[i]); if (s) strokes.push(s); }
+          if (strokes.length > 0) {
+            o.strokes = strokes;
+            if (typeof node.strokeWeight === 'number' && node.strokeWeight !== 0) o.strokeWeight = node.strokeWeight;
+          }
+        }
+
+        if (typeof node.cornerRadius === 'number' && node.cornerRadius !== 0 && node.cornerRadius !== figma.mixed) {
+          o.cornerRadius = Math.round(node.cornerRadius);
+        } else if (node.cornerRadius === figma.mixed) {
+          o.cornerRadii = [Math.round(node.topLeftRadius || 0), Math.round(node.topRightRadius || 0), Math.round(node.bottomRightRadius || 0), Math.round(node.bottomLeftRadius || 0)];
+        }
+
+        if (node.effects && node.effects.length > 0) {
+          var effects = [];
+          for (var i = 0; i < node.effects.length; i++) { var e = serializeEffect(node.effects[i]); if (e) effects.push(e); }
+          if (effects.length > 0) o.effects = effects;
+        }
+
+        if (node.layoutMode && node.layoutMode !== 'NONE') {
+          var layout = { mode: node.layoutMode };
+          if (node.layoutWrap === 'WRAP') layout.wrap = true;
+          if (typeof node.itemSpacing === 'number' && node.itemSpacing !== 0) layout.gap = node.itemSpacing;
+          if (typeof node.counterAxisSpacing === 'number' && node.counterAxisSpacing !== 0) layout.counterGap = node.counterAxisSpacing;
+          var pt = node.paddingTop || 0, pr = node.paddingRight || 0, pb = node.paddingBottom || 0, pl = node.paddingLeft || 0;
+          if (pt || pr || pb || pl) layout.padding = [pt, pr, pb, pl];
+          if (node.primaryAxisAlignItems && node.primaryAxisAlignItems !== 'MIN') layout.mainAlign = node.primaryAxisAlignItems;
+          if (node.counterAxisAlignItems && node.counterAxisAlignItems !== 'MIN') layout.crossAlign = node.counterAxisAlignItems;
+          o.layout = layout;
+        }
+
+        if (node.layoutSizingHorizontal && node.layoutSizingHorizontal !== 'FIXED') o.sizingH = node.layoutSizingHorizontal;
+        if (node.layoutSizingVertical && node.layoutSizingVertical !== 'FIXED') o.sizingV = node.layoutSizingVertical;
+
+        if (node.type === 'TEXT') {
+          var chars = node.characters || '';
+          o.text = chars.length > 200 ? chars.substring(0, 200) + '...' : chars;
+          if (node.fontSize !== figma.mixed && typeof node.fontSize === 'number') o.fontSize = node.fontSize;
+          else if (node.fontSize === figma.mixed) o.fontSize = 'mixed';
+          if (node.fontName !== figma.mixed && node.fontName) o.font = node.fontName.family + ' ' + node.fontName.style;
+        }
+
+        // Raw variable binding IDs (no async resolution — fast)
+        if (node.boundVariables) {
+          var bv = node.boundVariables;
+          var hasBindings = false;
+          var bindings = {};
+          for (var prop in bv) {
+            if (!bv.hasOwnProperty(prop)) continue;
+            var binding = bv[prop];
+            if (Array.isArray(binding) && binding.length > 0 && binding[0] && binding[0].id) {
+              bindings[prop] = binding[0].id;
+              hasBindings = true;
+            } else if (binding && binding.id) {
+              bindings[prop] = binding.id;
+              hasBindings = true;
+            }
+          }
+          if (hasBindings) o.varIds = bindings;
+        }
+
+        // Style bindings (sync)
+        if (node.fillStyleId && typeof node.fillStyleId === 'string' && node.fillStyleId.length > 0) o.fillStyleId = node.fillStyleId;
+        if (node.strokeStyleId && typeof node.strokeStyleId === 'string' && node.strokeStyleId.length > 0) o.strokeStyleId = node.strokeStyleId;
+        if (node.textStyleId && typeof node.textStyleId === 'string' && node.textStyleId.length > 0) o.textStyleId = node.textStyleId;
+        if (node.effectStyleId && typeof node.effectStyleId === 'string' && node.effectStyleId.length > 0) o.effectStyleId = node.effectStyleId;
+
+        // Instance info (sync only — no getMainComponentAsync)
+        if (node.type === 'INSTANCE') {
+          if (node.componentProperties) {
+            o.componentProperties = {};
+            var cp = node.componentProperties;
+            for (var k in cp) { if (cp.hasOwnProperty(k)) o.componentProperties[k] = { type: cp[k].type, value: cp[k].value }; }
+          }
+        }
+
+        if (node.type === 'COMPONENT' || node.type === 'COMPONENT_SET') {
+          if (node.description) o.description = node.description;
+        }
+
+        // Children — recursive sync
+        if (node.children && depth > 0) {
+          var maxChildren = 20;
+          var childCount = node.children.length;
+          if (childCount > maxChildren) {
+            var children = [];
+            for (var i = 0; i < 10; i++) children.push(inspectNodeSync(node.children[i], depth - 1));
+            o.children = children;
+            o.childCount = childCount;
+            o.childrenTruncated = true;
+          } else if (childCount > 0) {
+            var children = [];
+            for (var i = 0; i < childCount; i++) children.push(inspectNodeSync(node.children[i], depth - 1));
+            o.children = children;
+          }
+        } else if (node.children && node.children.length > 0 && depth === 0) {
+          o.childCount = node.children.length;
+        }
+
+        return o;
+      }
+
+      // Root node inspector — async only for root (variable resolution + component lookup)
+      async function inspectRoot(node, depth) {
+        // Start with sync collection of all properties
+        var o = inspectNodeSync(node, 0); // root node sync props only (no children yet)
+
+        // Async enrichment — only for root node
+        // Resolve variable bindings to human-readable names
+        var vars = await resolveVarBindings(node);
+        if (vars) { delete o.varIds; o.vars = vars; }
+
+        // Component info — async for root only
+        if (node.type === 'INSTANCE') {
+          try {
+            var main = await node.getMainComponentAsync();
+            if (main) {
+              o.mainComponent = { id: main.id, name: main.name, key: main.key };
+            } else {
+              o.mainComponent = { name: 'unavailable' };
+            }
+          } catch (e) {
+            o.mainComponent = { name: 'unavailable' };
+          }
+        }
+
+        if (node.type === 'COMPONENT_SET' || (node.type === 'COMPONENT' && !(node.parent && node.parent.type === 'COMPONENT_SET'))) {
+          try { if (node.componentPropertyDefinitions) o.propertyDefs = node.componentPropertyDefinitions; } catch(e) {}
+        }
+        if (node.type === 'COMPONENT_SET' && node.children) {
+          o.variantCount = node.children.length;
+          var variants = [];
+          var limit = Math.min(node.children.length, 20);
+          for (var i = 0; i < limit; i++) variants.push({ id: node.children[i].id, name: node.children[i].name });
+          o.variants = variants;
+          if (node.children.length > 20) o.variantsTruncated = true;
+        }
+
+        // Parent context
+        if (node.parent && node.parent.type !== 'PAGE' && node.parent.type !== 'DOCUMENT') {
+          var parentInfo = { id: node.parent.id, name: node.parent.name, type: node.parent.type };
+          if (node.parent.layoutMode && node.parent.layoutMode !== 'NONE') parentInfo.layoutMode = node.parent.layoutMode;
+          o.parent = parentInfo;
+        }
+        var pathParts = [];
+        var ancestor = node.parent;
+        while (ancestor && ancestor.type !== 'DOCUMENT') { pathParts.unshift(ancestor.name); ancestor = ancestor.parent; }
+        if (pathParts.length > 0) o.path = pathParts.join(' > ');
+
+        // Children — use fast sync inspector for subtrees
+        if (node.children && depth > 0) {
+          var maxChildren = 20;
+          var childCount = node.children.length;
+          if (childCount > maxChildren) {
+            var children = [];
+            for (var i = 0; i < 10; i++) children.push(inspectNodeSync(node.children[i], depth - 1));
+            o.children = children;
+            o.childCount = childCount;
+            o.childrenTruncated = true;
+            o.hint = childCount + ' children. Use figma_inspect with nodeId on specific children.';
+          } else if (childCount > 0) {
+            var children = [];
+            for (var i = 0; i < childCount; i++) children.push(inspectNodeSync(node.children[i], depth - 1));
+            o.children = children;
+          }
+        } else if (node.children && node.children.length > 0 && depth === 0) {
+          o.childCount = node.children.length;
+        }
+
+        return o;
+      }
+
+      var result = await inspectRoot(rootNode, maxDepth);
+
+      // Add selection context when falling back to selection
+      if (otherSelected) {
+        result.otherSelected = otherSelected;
+        result.selectionCount = otherSelected.length + 1;
+      }
+      // Always include current page name
+      result.page = figma.currentPage.name;
+
+      figma.ui.postMessage({
+        type: 'INSPECT_NODE_RESULT',
+        requestId: msg.requestId,
+        success: true,
+        data: result
+      });
+
+    } catch (error) {
+      postError('INSPECT_NODE', msg.requestId, error);
     }
   }
 };

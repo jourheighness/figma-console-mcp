@@ -445,9 +445,20 @@
       var params = { nodeId: nodeId, propertyName: propertyName, propertyType: type, defaultValue: defaultValue };
       if (options) {
         if (options.preferredValues) params.preferredValues = options.preferredValues;
+        if (options.targetNodeId) params.targetNodeId = options.targetNodeId;
+        if (options.targetProperty) params.targetProperty = options.targetProperty;
       }
       return window.sendPluginCommand('ADD_COMPONENT_PROPERTY', params)
         .catch(function(err) { return { success: false, error: err.message || String(err) }; });
+    };
+
+    // Wire a component property to a layer's property reference
+    window.wireComponentProperty = (targetNodeId, propertyName, targetProperty) => {
+      return window.sendPluginCommand('WIRE_COMPONENT_PROPERTY', {
+        targetNodeId: targetNodeId,
+        propertyName: propertyName,
+        targetProperty: targetProperty || 'characters'
+      }).catch(function(err) { return { success: false, error: err.message || String(err) }; });
     };
 
     // Edit an existing component property
@@ -549,7 +560,7 @@
     window.setTextContent = (nodeId, text, options) => {
       var params = { nodeId: nodeId, text: text };
       if (options) {
-        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'textStyleId', 'variableBindings'];
+        var passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'textStyleId', 'variableBindings', 'hyperlinks'];
         for (var i = 0; i < passthrough.length; i++) {
           if (options[passthrough[i]] !== undefined) params[passthrough[i]] = options[passthrough[i]];
         }
@@ -600,6 +611,15 @@
       }).catch(function(err) { return { success: false, error: err.message || String(err) }; });
     };
 
+    // Deep node inspection with data stripping and variable resolution
+    window.inspectNode = (nodeId, depth) => {
+      return window.sendPluginCommand('INSPECT_NODE', {
+        nodeId: nodeId || null,
+        depth: typeof depth === 'number' ? depth : 1
+      }, 30000)
+        .catch(function(err) { return { success: false, error: err.message || String(err) }; });
+    };
+
     // ============================================================================
     // WEBSOCKET BRIDGE CLIENT - Fallback transport when CDP is unavailable
     // ============================================================================
@@ -642,6 +662,7 @@
         'ADD_COMPONENT_PROPERTY': function(params) { return window.addComponentProperty(params.nodeId, params.propertyName, params.propertyType, params.defaultValue, params); },
         'EDIT_COMPONENT_PROPERTY': function(params) { return window.editComponentProperty(params.nodeId, params.propertyName, params.newValue); },
         'DELETE_COMPONENT_PROPERTY': function(params) { return window.deleteComponentProperty(params.nodeId, params.propertyName); },
+        'WIRE_COMPONENT_PROPERTY': function(params) { return window.wireComponentProperty(params.targetNodeId, params.propertyName, params.targetProperty); },
         'RESIZE_NODE': function(params) { return window.resizeNode(params.nodeId, params.width, params.height, params.withConstraints); },
         'MOVE_NODE': function(params) { return window.moveNode(params.nodeId, params.x, params.y); },
         'SET_NODE_FILLS': function(params) { return window.setNodeFills(params.nodeId, params.fills); },
@@ -658,6 +679,8 @@
         'SCAFFOLD_TREE': function(params) { return window.scaffoldTree(params.parentId, params.tree); },
         'CAPTURE_SCREENSHOT': function(params) { return window.captureScreenshot(params.nodeId, params); },
         'SET_INSTANCE_PROPERTIES': function(params) { return window.setInstanceProperties(params.nodeId, params.properties); },
+        'INSPECT_NODE': function(params) { return window.inspectNode(params.nodeId, params.depth); },
+        'GET_LOCAL_STYLES': function() { return window.sendPluginCommand('GET_LOCAL_STYLES', {}, 30000).catch(function(err) { return { success: false, error: err.message || String(err) }; }); },
         'GET_VARIABLES_DATA': function() {
           // Return the cached variables data directly
           if (window.__figmaVariablesReady && window.__figmaVariablesData) {
@@ -1272,6 +1295,10 @@
           handleResult('DELETE_COMPONENT_PROPERTY', null);
           break;
 
+        case 'WIRE_COMPONENT_PROPERTY_RESULT':
+          handleResult('WIRE_COMPONENT_PROPERTY', 'wiredTo');
+          break;
+
         // NEW: Node manipulation operations
         case 'RESIZE_NODE_RESULT':
           handleResult('RESIZE_NODE', 'node');
@@ -1338,6 +1365,12 @@
           break;
         case 'SET_INSTANCE_PROPERTIES_RESULT':
           handleResult('SET_INSTANCE_PROPERTIES', 'instance');
+          break;
+        case 'INSPECT_NODE_RESULT':
+          handleResult('INSPECT_NODE', null);
+          break;
+        case 'GET_LOCAL_STYLES_RESULT':
+          handleResult('GET_LOCAL_STYLES', null);
           break;
 
         // File info

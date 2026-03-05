@@ -43,10 +43,71 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 	});
 }
 
+/** Count nodes in a nested children tree (recursive). */
+function countTreeNodes(children: any[]): number {
+	let count = 0;
+	for (const child of children) {
+		count += 1;
+		if (child.children && Array.isArray(child.children)) {
+			count += countTreeNodes(child.children);
+		}
+	}
+	return count;
+}
+
+/**
+ * Hard-reject operations too complex for batch execution.
+ * Returns an error message string, or null if all operations are OK.
+ */
+function checkBatchComplexity(operations: { tool: string; args?: Record<string, any>; id?: string }[]): string | null {
+	const rejected: string[] = [];
+
+	for (let i = 0; i < operations.length; i++) {
+		const op = operations[i];
+		const id = op.id || `op_${i}`;
+		const args = op.args || {};
+
+		// figma_create_nodes with nested children — this is where LLMs spiral
+		if (op.tool === "figma_create_nodes" && args.children) {
+			let children: any[];
+			try {
+				children = typeof args.children === "string" ? JSON.parse(args.children) : args.children;
+			} catch {
+				continue; // let the tool itself handle parse errors
+			}
+			if (Array.isArray(children) && children.length > 0) {
+				const totalNodes = countTreeNodes(children);
+				rejected.push(
+					`[${id}] figma_create_nodes with ${totalNodes} nested child node${totalNodes > 1 ? "s" : ""} — too complex for batch. Call this standalone so errors are isolated and layout is applied correctly.`
+				);
+			}
+		}
+
+		// figma_instantiate_component — instance creation with overrides can be complex
+		if (op.tool === "figma_instantiate_component" && args.overrides) {
+			let overrides: any;
+			try {
+				overrides = typeof args.overrides === "string" ? JSON.parse(args.overrides) : args.overrides;
+			} catch {
+				continue;
+			}
+			if (overrides && typeof overrides === "object" && Object.keys(overrides).length > 5) {
+				rejected.push(
+					`[${id}] figma_instantiate_component with ${Object.keys(overrides).length} overrides — too complex for batch. Call standalone to debug override failures individually.`
+				);
+			}
+		}
+	}
+
+	if (rejected.length === 0) return null;
+
+	return `Batch rejected — ${rejected.length} operation${rejected.length > 1 ? "s" : ""} too complex for batch execution:\n\n${rejected.join("\n\n")}\n\nCall these tools as standalone requests instead. Batch is for reads and simple per-node writes, not nested tree construction.`;
+}
+
 export function registerBatchTool(server: McpServer): void {
 	server.tool(
 		"figma_batch",
-		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Recommended batch-friendly tools: figma_get_file_data, figma_get_variables, figma_get_styles, figma_find_components, figma_get_selection, figma_get_library_components. Screenshot tools (figma_screenshot) return large payloads that can overflow batch responses — call those as standalone requests instead.",
+		"Execute multiple Figma tools in a single batch request. Each operation runs independently — if one fails, others still succeed. Best for: read operations (figma_get_file_data, figma_get_variables, figma_get_styles, figma_find_components, figma_get_selection, figma_get_library_components, figma_find_node) and simple write operations (figma_edit_node, figma_set_appearance, figma_set_text on individual nodes). Do NOT batch complex tree creation — figma_create_nodes with nested children, component instantiation with layout setup, or multi-step component assembly should be called one at a time as standalone requests. Batching complex nested structures causes timeouts and layout errors. figma_screenshot returns large payloads that overflow batch responses — call standalone.",
 		{
 			operations: jsonArray(z.array(
 					z.object({
@@ -120,6 +181,15 @@ export function registerBatchTool(server: McpServer): void {
 						isError: true,
 					};
 				}
+			}
+
+			// Reject complex operations that don't belong in batch
+			const complexOps = checkBatchComplexity(operations);
+			if (complexOps) {
+				return {
+					content: [{ type: "text" as const, text: complexOps }],
+					isError: true,
+				};
 			}
 
 			async function executeOperation(

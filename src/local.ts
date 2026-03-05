@@ -106,37 +106,49 @@ class LocalFigmaConsoleMCP {
 				version: "0.1.0",
 			},
 			{
-				instructions: `## Figma Console MCP — Tool Reference (25 tools)
+				instructions: `## Figma Console MCP — Tool Reference (26 tools)
+
+### MCP Resources (check BEFORE making tool calls)
+These cached resources provide instant project context — read them first to avoid unnecessary tool calls:
+- figma://context/current — overview of the currently-open file: pages, component counts, variable collections, styles. Read this at the start of every session.
+- figma://context/{fileKey} — full context for a specific file (pages, components, tokens, styles).
+- figma://context/{fileKey}/components — component inventory for the file.
+- figma://context/{fileKey}/tokens — variable collections and token summary.
+- figma://context/{fileKey}/styles — style summary (paint, text, effect).
+- figma://context/library — team design system library catalog (if FIGMA_DESIGN_SYSTEMS configured).
 
 ### Session Start
-1. figma_connection action='navigate' — open a Figma URL or switch files. ALWAYS first.
-2. figma_find_components verbosity='overview' — get design system map (components, tokens, categories).
-3. figma_get_selection — see what the user has selected. Use instead of asking.
-4. figma_get_viewport — see what's currently visible in the Figma canvas (viewport bounds, zoom, and nodes in view). Use to understand context without requiring selection.
+1. Read figma://context/current — get instant file overview before any tool calls.
+2. figma_connection action='navigate' — open a Figma URL or switch files. ALWAYS first tool call.
+3. figma_context — consolidated design system overview (components, variables, styles) in one call.
+4. figma_inspect — deep-inspect a node: structure, visuals, layout, text, variable bindings (resolved to names), component info, children. Omit nodeId to inspect current selection (includes otherSelected for multi-select).
+5. figma_get_viewport — see what's currently visible in the Figma canvas without requiring selection.
 
-### Read Data (start with lowest verbosity, escalate on demand)
-- figma_get_file_data — document tree. Start verbosity='summary' depth=1, then drill into nodeIds.
-- figma_get_variables — design tokens/variables. Start format='summary'. Works via Desktop Bridge on all plans.
-- figma_get_styles — color, text, effect, grid styles with optional code exports.
+### Read Data
+- figma_inspect — THE primary read tool. Deep-inspect any node with aggressive data stripping. Falls back to selection if no nodeId.
+- figma_context — design system overview from cache: component inventory, variable collections, style counts.
+- figma_find_node — search current page for nodes by name/type. Use to locate nodes before inspecting.
 - figma_get_component — single component detail (metadata | reconstruction | development format).
-- figma_find_components — search/browse components. Levels: overview → keys → summary → details.
+- figma_find_components — search/browse components: keys → summary → details. Use figma_context for overview.
+- figma_get_variables — design tokens with code export (CSS/Tailwind/Sass/TS). Use figma_context for summary.
+- figma_get_styles — styles with code export. Use figma_context for summary.
 - figma_get_library_components — search team's published library by name (needs FIGMA_DESIGN_SYSTEMS).
 
 ### Write: Node Structure
-- figma_edit_node — action: resize | move | clone | delete | rename | reparent | reorder.
+- figma_edit_node — action: resize | move | clone | delete | rename | reparent | reorder | detach | focus.
 - figma_create_nodes — create a node or entire node tree inside a parent. Supports COMPONENT type for reusable definitions.
 - figma_manage_page — action: create | delete | rename | switch | reorder | list.
 
 ### Write: Visual Properties
 - figma_set_appearance — fills, strokes, opacity, cornerRadius, effects, rotation, blendMode.
-- figma_set_text — content + full typography (font, size, alignment, spacing, decoration, case) + variable bindings for text properties (fontSize, fontFamily, lineHeight, letterSpacing, etc.).
+- figma_set_text — content + full typography (font, size, alignment, spacing, decoration, case) + variable bindings + hyperlinks on character ranges (type "URL" for web links, "NODE" for deep-links to other Figma nodes).
 - figma_set_layout — auto-layout (flexbox) or CSS grid on frames. Padding, gap, alignment, wrap.
 
 ### Write: Components & Instances
 - figma_instantiate_component — create instance. ALWAYS pass both componentKey AND nodeId together.
 - figma_set_instance_properties — update props on instance. NOT direct text editing (fails silently).
 - figma_component_property — action: add | edit | delete | set_description. Manage component props and descriptions.
-- figma_combine_as_variants — combine individual COMPONENT nodes into a COMPONENT_SET (variant group). Requires ≥ 2 components with variant naming ("Property=Value, Property=Value").
+- figma_component_property — action: add | edit | delete | wire | set_description. Manage component props and descriptions. For TEXT properties, use targetNodeId with add to auto-wire, or use wire action to connect existing properties to layers.
 - figma_arrange_component_set — organize variant grid with Figma's native layout.
 
 ### Write: Variables & Tokens
@@ -154,24 +166,24 @@ class LocalFigmaConsoleMCP {
 - figma_connection — action: navigate | status | reconnect | invalidate_cache | reload | list_files | changes.
 
 ### Multi-Tool
-- figma_batch — run up to 25 tools in one request. Do NOT include figma_screenshot (payload too large).
+- figma_batch — run up to 25 tools in one request. Best for reads and simple writes (edit, appearance, text on individual nodes). Do NOT batch complex nested figma_create_nodes, component instantiation with layout, or multi-step component assembly — do those one at a time. Do NOT include figma_screenshot (payload too large).
 
 ### Modifying Designs
 - NEVER delete and rebuild when a modification was requested. Inspect existing nodes → use set_* tools.
-- Before ANY edit: figma_get_selection or figma_edit_node action='inspect' to get current node IDs and state.
-- To find existing nodes: figma_get_file_data with the parent nodeId, depth=2. Never guess IDs.
+- Before ANY edit: figma_inspect (omit nodeId to inspect selection), or figma_find_node to locate nodes by name/type.
+- To find existing nodes: use figma_find_node first. For detailed properties of a known node, use figma_inspect.
 - To see recent changes (yours or user's): figma_connection action='changes'.
 - Modify with figma_set_text, figma_set_appearance, figma_set_layout — not by recreating trees.
 - Only use figma_create_nodes for NEW nodes that don't exist yet.
 - After visual changes: screenshot once to verify. Max 2 fix iterations, then ask the user.
 
 ### Design Resources — Local vs Remote
-- Local variables/tokens: figma_get_variables format='summary' — live from Desktop Bridge cache.
-- Local styles: figma_get_styles — color, text, effect styles with resolved values.
-- Local components: figma_find_components verbosity='keys' query='Name' — cached keys for instantiation.
-- Remote/library components: figma_get_library_components namePattern='Name' — team library cache (60min TTL).
-- Remote/library styles: figma_get_library_components type='style' namePattern='Name' — returns style keys.
-- Style keys from the library work DIRECTLY as fillStyleId/textStyleId/effectStyleId — the plugin resolves keys internally. No need to convert keys to local IDs.
+- FIRST: figma_context for cached component/variable/style overview.
+- Code export: figma_get_variables format='css'/'tailwind' — for token code generation.
+- Code export: figma_get_styles with export formats — for style code generation.
+- Component keys: figma_find_components verbosity='keys' query='Name' — cached keys for instantiation.
+- Remote/library: figma_get_library_components namePattern='Name' — team library cache (60min TTL).
+- Style keys from the library work DIRECTLY as fillStyleId/textStyleId/effectStyleId — the plugin resolves keys internally.
 - DO NOT inspect random nodes to discover colors/fonts/tokens. The caches above have everything indexed.
 
 ### Figma Layout Rules (the API does NOT auto-fix layout)
@@ -181,6 +193,13 @@ class LocalFigmaConsoleMCP {
 - GRID: children all stack at cell (0,0) by default. You MUST set gridColumnAnchorIndex + gridRowAnchorIndex on EACH child via figma_set_layout.
 - Creating a frame does NOT make it auto-layout. Set layoutMode explicitly.
 - Coordinates (x, y) are parent-relative. Section parents offset from page origin.
+- Frames and components are created with clipsContent=true by default (matches Figma UI behavior). Pass clipsContent=false in properties to override.
+
+### Effects (Shadows, Blurs, Focus Rings)
+- CRITICAL: Drop shadow effects on a frame require clipsContent=true to render. Without it, the frame has no hard visual boundary and effects silently fail to appear. This is why frames/components default to clipsContent=true.
+- Focus ring pattern: TWO layered DROP_SHADOW effects on the frame itself — (1) white shadow with spread=2 (inner gap), (2) blue shadow with spread=4 (outer ring). Order matters: white on top, blue underneath. Both render outside the frame bounds, taking its shape.
+- This replaces stroke-based focus rings because strokes lack an "outside" position option. The shadow approach works on any shape and extends beyond component bounds.
+- Effects with spread do NOT affect layout sizing — they are purely visual and extend beyond the node's bounding box.
 
 ### Component Instances
 - INSTANCE_SWAP overrides: figma_instantiate_component's overrides param ONLY handles TEXT and BOOLEAN properties. For INSTANCE_SWAP, you MUST call figma_set_instance_properties as a separate step after instantiation.
@@ -190,11 +209,14 @@ class LocalFigmaConsoleMCP {
 ### Text Styles and Fills
 - To apply a text style while preserving a custom fill: (1) figma_set_text with textStyleId, then (2) figma_set_appearance with fills. The style sets typography; the fill override sticks on top.
 - When mixing text nodes in the same layout, ensure lineHeight values match. Mixing INTRINSIC (auto) with explicit percentages (e.g. 150%) causes baseline misalignment.
-- To verify style bindings after applying: figma_get_file_data on the specific node with depth=0 — check the styles.text or styles.fill field. The figma_get_styles tool only lists file-level style definitions, not per-node bindings.
+- figma_inspect returns TWO different binding types — don't confuse them:
+  - Style bindings (fillStyleId/textStyleId/effectStyleId): reusable PRESETS that bundle multiple properties (e.g. textStyleId = font+size+weight+lineHeight). Apply via figma_set_text textStyleId or figma_set_appearance fillStyleId.
+  - Variable bindings (vars/varIds): individual design TOKENS bound to single properties (e.g. fills → "Colors/Primary"). Apply via variableBindings param on set_appearance/set_text/set_layout.
+  - A node can have BOTH — e.g. textStyleId for typography + a variable binding on its fill color.
 
 ### Rules
 - NodeIds are session-specific — NEVER reuse from a previous conversation. Always re-fetch.
-- Start at lowest verbosity/depth — verbosity='summary', depth=1. Escalate only when proven insufficient.
+- Use figma_find_node for node discovery, figma_inspect for node details. Avoid tree dumps.
 - Place components inside a Section or Frame, never on bare canvas.
 - Test tool capabilities on ONE node first before applying to many.
 - figma_get_variables works via Desktop Bridge on all plans. REST API fallback available for Enterprise users.

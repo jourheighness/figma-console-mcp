@@ -46,6 +46,7 @@ export interface IFigmaConnector {
   editComponentProperty(nodeId: string, propertyName: string, newValue: any): Promise<any>;
   deleteComponentProperty(nodeId: string, propertyName: string): Promise<any>;
   instantiateComponent(componentKey: string, options?: any): Promise<any>;
+  wireComponentProperty(targetNodeId: string, propertyName: string, targetProperty?: string): Promise<any>;
 
   // Node manipulation
   resizeNode(nodeId: string, width: number, height: number, withConstraints?: boolean): Promise<any>;
@@ -71,6 +72,7 @@ export interface IFigmaConnector {
     textDecoration?: string;
     textCase?: string;
     variableBindings?: Array<{ field: string; variableId: string }>;
+    hyperlinks?: Array<{ start: number; end: number; type: string; value: string }>;
   }): Promise<any>;
   createChildNode(parentId: string, nodeType: string, properties?: any): Promise<any>;
   scaffoldTree(parentId: string, tree: { nodeType: string; properties?: any; children?: any[] }): Promise<any>;
@@ -78,6 +80,11 @@ export interface IFigmaConnector {
   // Screenshot & instance
   captureScreenshot(nodeId: string, options?: any): Promise<any>;
   setInstanceProperties(nodeId: string, properties: any): Promise<any>;
+
+  // Inspection
+  inspectNode(nodeId?: string, depth?: number): Promise<any>;
+
+  getLocalStyles(): Promise<any>;
 
   // Cache management
   clearFrameCache(): void;

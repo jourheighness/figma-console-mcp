@@ -102,7 +102,9 @@ export function registerNodeTools(deps: LocalToolDeps): void {
 	// Tool: Edit Node (resize, move, clone, delete, rename, reparent, reorder, detach, inspect)
 	server.tool(
 		"figma_edit_node",
-		`Perform structural node operations: resize, move, clone, delete, rename, reparent (move to new parent), reorder (change z-order), detach (detach component instance), inspect (read node info), or focus (scroll viewport to node).
+		`Perform structural node operations: resize, move, clone, delete, rename, reparent (move to new parent), reorder (change z-order), detach (detach component instance), or focus (scroll viewport to node).
+
+For reading node properties, use figma_inspect instead.
 
 Actions and required params:
 - resize: width, height (optional: withConstraints)
@@ -113,11 +115,10 @@ Actions and required params:
 - reparent: newParentId (optional: insertIndex)
 - reorder: insertIndex (z-order position within current parent, 0 = bottom)
 - detach: Detach a component instance into a plain frame. Only works on INSTANCE nodes.
-- inspect: Read-only. Returns node info: type, name, size, parent (id/name/type/layoutMode), children count. Use to discover parent context before creating/modifying nodes.
 - focus: Scroll and zoom the viewport to center on a node. Use at start of work to orient, or after creating/modifying nodes so the user can see the result.`,
 		{
 			nodeId: z.string().describe("The node ID to operate on"),
-			action: z.enum(["resize", "move", "clone", "delete", "rename", "reparent", "reorder", "detach", "inspect", "focus"]).describe("Operation to perform"),
+			action: z.enum(["resize", "move", "clone", "delete", "rename", "reparent", "reorder", "detach", "focus"]).describe("Operation to perform"),
 			width: z.coerce.number().optional().describe("New width (resize)"),
 			height: z.coerce.number().optional().describe("New height (resize)"),
 			withConstraints: coerceBool().optional().default(true).describe("Respect child constraints during resize (default: true)"),
@@ -193,36 +194,6 @@ Actions and required params:
 						if (detachedNode) detachMsg += `\n  ${fmtNode(detachedNode)}`;
 						return ok(detachMsg);
 					}
-					case "inspect": {
-						const inspectResult = await connector.executeCodeViaUI(`
-							var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
-							if (!node) return { success: false, error: 'Node not found: ' + ${JSON.stringify(nodeId)} };
-							var info = {
-								id: node.id, name: node.name, type: node.type,
-								width: node.width !== undefined ? Math.round(node.width) : undefined,
-								height: node.height !== undefined ? Math.round(node.height) : undefined,
-								visible: node.visible,
-							};
-							if (node.parent) {
-								info.parent = { id: node.parent.id, name: node.parent.name, type: node.parent.type };
-								if (node.parent.layoutMode) info.parent.layoutMode = node.parent.layoutMode;
-								if (node.parent.layoutWrap) info.parent.layoutWrap = node.parent.layoutWrap;
-								if (node.parent.primaryAxisAlignItems) info.parent.primaryAxisAlignItems = node.parent.primaryAxisAlignItems;
-								if (node.parent.counterAxisAlignItems) info.parent.counterAxisAlignItems = node.parent.counterAxisAlignItems;
-								if (node.parent.itemSpacing !== undefined) info.parent.itemSpacing = node.parent.itemSpacing;
-							}
-							if (node.children) info.childCount = node.children.length;
-							if (node.type === 'INSTANCE') {
-								info.componentId = node.componentProperties ? Object.keys(node.componentProperties).length + ' properties' : '0 properties';
-								try { info.mainComponentName = node.mainComponent ? node.mainComponent.name : undefined; } catch(e) {}
-							}
-							return { success: true, node: info };
-						`);
-						if (inspectResult.error) throw new Error(inspectResult.error);
-						const ir = inspectResult.result || inspectResult;
-						const nodeData = ir.node ?? ir;
-						return ok(typeof nodeData === "string" ? nodeData : JSON.stringify(nodeData, null, 2));
-					}
 					case "focus": {
 						const focusResult = await connector.executeCodeViaUI(`
 							var node = await figma.getNodeByIdAsync(${JSON.stringify(nodeId)});
@@ -259,7 +230,11 @@ Actions and required params:
 		"figma_set_appearance",
 		`Set visual appearance properties on a node. Combines fills, strokes, opacity, corner radius, effects (shadows/blurs), rotation, and blend mode into a single tool.
 
-Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient fills use type 'GRADIENT_LINEAR'/'GRADIENT_RADIAL' with gradientStops array. gradientTransform defaults to left-to-right if omitted.`,
+Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient fills use type 'GRADIENT_LINEAR'/'GRADIENT_RADIAL' with gradientStops array. gradientTransform defaults to left-to-right if omitted.
+
+Variable bindings: use variableBindings to bind variables to node properties, paint colors (fills/strokes with paintIndex), or effect properties (effectColor, effectRadius, effectSpread, effectOffsetX, effectOffsetY with effectIndex). Warning: icon instances often have empty fills — use field "strokes" instead of "fills" for variable binding on icons.
+
+IMPORTANT: Drop shadow effects on frames require clipsContent=true on that frame to render — without it, the frame has no visual boundary and effects silently don't appear. Focus ring pattern: two DROP_SHADOW effects on the frame — white (spread=2, gap) on top + blue (spread=4, ring) underneath. This extends beyond the frame bounds, taking its shape.`,
 		{
 			nodeId: z.string().describe("The node ID to modify"),
 			fills: jsonArray(z.array(
@@ -334,9 +309,11 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 					"fills", "strokes", "opacity", "cornerRadius",
 					"topLeftRadius", "topRightRadius", "bottomRightRadius", "bottomLeftRadius",
 					"strokeWeight", "rotation", "visible",
-				]).describe("Node property to bind"),
+					"effectColor", "effectRadius", "effectSpread", "effectOffsetX", "effectOffsetY",
+				]).describe("Node property to bind. Effect fields require effectIndex."),
 				variableId: z.string().describe("Variable ID (e.g. 'VariableID:123:456'). Empty string to unbind."),
 				paintIndex: z.coerce.number().optional().describe("Paint index within fills/strokes array (default: 0). Only for fills/strokes fields."),
+				effectIndex: z.coerce.number().optional().describe("Effect index within effects array (default: 0). Required for effect fields (effectColor, effectRadius, etc.)."),
 			}))).optional().describe("Bind variables to node properties. Use figma_get_variables to get variable IDs first."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -458,12 +435,21 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 					needsCodeExec = true;
 				}
 
+
 				if (variableBindings !== undefined) {
 					const paintFields = ["fills", "strokes"];
+					const effectFields: Record<string, string> = {
+						effectColor: 'color',
+						effectRadius: 'radius',
+						effectSpread: 'spread',
+						effectOffsetX: 'offsetX',
+						effectOffsetY: 'offsetY',
+					};
 					for (const binding of variableBindings) {
 						if (paintFields.includes(binding.field)) {
 							const idx = binding.paintIndex ?? 0;
 							const field = binding.field;
+							codeLines.push(`if (!node.${field} || !node.${field}[${idx}]) throw new Error('No ${field === "fills" ? "fill" : "stroke"} at index ${idx} on node ' + node.id + '. Icon instances typically use strokes instead of fills — try field: "strokes".');`);
 							if (binding.variableId === "") {
 								// Unbind at paint level — fills/strokes require setBoundVariableForPaint, not node.setBoundVariable
 								codeLines.push(`var _paints = [...node.${field}];`);
@@ -476,6 +462,20 @@ Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient f
 								codeLines.push(`if (!_var) throw new Error('Variable not found: ${binding.variableId}');`);
 								codeLines.push(`_paints[${idx}] = figma.variables.setBoundVariableForPaint(_paints[${idx}], 'color', _var);`);
 								codeLines.push(`node.${field} = _paints;`);
+							}
+						} else if (effectFields[binding.field]) {
+							const effectProp = effectFields[binding.field];
+							const idx = binding.effectIndex ?? 0;
+							if (binding.variableId === "") {
+								codeLines.push(`var _effects = [...node.effects];`);
+								codeLines.push(`_effects[${idx}] = figma.variables.setBoundVariableForEffect(_effects[${idx}], '${effectProp}', null);`);
+								codeLines.push(`node.effects = _effects;`);
+							} else {
+								codeLines.push(`var _effects = [...node.effects];`);
+								codeLines.push(`var _var = await figma.variables.getVariableByIdAsync(${JSON.stringify(binding.variableId)});`);
+								codeLines.push(`if (!_var) throw new Error('Variable not found: ${binding.variableId}');`);
+								codeLines.push(`_effects[${idx}] = figma.variables.setBoundVariableForEffect(_effects[${idx}], '${effectProp}', _var);`);
+								codeLines.push(`node.effects = _effects;`);
 							}
 						} else {
 							if (binding.variableId === "") {
@@ -918,10 +918,11 @@ Paint styles: solid fills and gradients. Text styles: font properties. Effect st
 	// Tool: Set Text Content (with full typography support)
 	server.tool(
 		"figma_set_text",
-		`Set text content and typography on a text node. Supports full font control, alignment, spacing, decoration, auto-resize, and variable bindings for text properties.
+		`Set text content and typography on a text node. Supports full font control, alignment, spacing, decoration, auto-resize, variable bindings, and hyperlinks on character ranges.
 
 Font style names: "Regular", "Bold", "Semi Bold", "Light", "Italic", "Bold Italic", etc. — must match an installed font style exactly.
-Variable bindings: bind fontSize, fontFamily, lineHeight, letterSpacing, etc. to design token variables via variableBindings param.`,
+Variable bindings: bind fontSize, fontFamily, lineHeight, letterSpacing, etc. to design token variables via variableBindings param.
+Hyperlinks: apply clickable links to character ranges. Indices are 0-based, referring to character positions AFTER the text param is applied (or on the existing text if text is omitted). Use type "URL" for web links, "NODE" to link to another node in the file.`,
 		{
 			nodeId: z.string().describe("The text node ID"),
 			text: z.string().optional().describe("The new text content (omit to keep existing text and only change styling)"),
@@ -949,9 +950,15 @@ Variable bindings: bind fontSize, fontFamily, lineHeight, letterSpacing, etc. to
 				]).describe("Text property to bind"),
 				variableId: z.string().describe("Variable ID (e.g. 'VariableID:123:456'). Empty string to unbind."),
 			}))).optional().describe("Bind variables to text properties. Use figma_get_variables to find variable IDs first."),
+			hyperlinks: jsonArray(z.array(z.object({
+				start: z.coerce.number().describe("Start character index (0-based, inclusive)"),
+				end: z.coerce.number().describe("End character index (0-based, exclusive)"),
+				type: z.enum(["URL", "NODE"]).describe("'URL' for web links, 'NODE' to deep-link to another Figma node"),
+				value: z.string().describe("The URL (for type 'URL') or the target node ID (for type 'NODE')"),
+			}))).optional().describe("Apply hyperlinks to character ranges. Indices refer to text AFTER the text param is applied. To remove a hyperlink, omit that range from the array and set text to the same content (hyperlinks are replaced, not merged)."),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-		async ({ nodeId, text, fontSize, fontFamily, fontStyle, textAlignHorizontal, textAlignVertical, lineHeight, letterSpacing, textAutoResize, textDecoration, textCase, textStyleId, variableBindings }) => {
+		async ({ nodeId, text, fontSize, fontFamily, fontStyle, textAlignHorizontal, textAlignVertical, lineHeight, letterSpacing, textAutoResize, textDecoration, textCase, textStyleId, variableBindings, hyperlinks }) => {
 			try {
 				const connector = await getDesktopConnector();
 				const options: Record<string, any> = {};
@@ -967,6 +974,7 @@ Variable bindings: bind fontSize, fontFamily, lineHeight, letterSpacing, etc. to
 				if (textCase !== undefined) options.textCase = textCase;
 				if (textStyleId !== undefined) options.textStyleId = textStyleId;
 				if (variableBindings !== undefined) options.variableBindings = variableBindings;
+				if (hyperlinks !== undefined) options.hyperlinks = hyperlinks;
 
 				const result = await connector.setTextContent(
 					nodeId,
@@ -980,8 +988,25 @@ Variable bindings: bind fontSize, fontFamily, lineHeight, letterSpacing, etc. to
 
 				const bindPart = variableBindings?.length ? ` (${variableBindings.length} variable binding${variableBindings.length > 1 ? "s" : ""})` : "";
 				const stylePart = textStyleId !== undefined ? (textStyleId === "" ? " (style detached)" : " + style applied") : "";
+				// Report actual hyperlinks applied from bridge result, not just input count
+				const appliedLinks = result.node?.hyperlinksApplied ?? 0;
+				const requestedLinks = hyperlinks?.length ?? 0;
+				const failedLinks = result.node?.hyperlinksFailed;
+				let linkPart = "";
+				if (requestedLinks > 0) {
+					if (appliedLinks === requestedLinks) {
+						linkPart = ` (${appliedLinks} hyperlink${appliedLinks > 1 ? "s" : ""} verified)`;
+					} else if (appliedLinks > 0) {
+						linkPart = ` (${appliedLinks}/${requestedLinks} hyperlinks verified)`;
+					} else {
+						linkPart = ` (WARNING: ${requestedLinks} hyperlinks requested but 0 verified by read-back)`;
+					}
+					if (failedLinks?.length) {
+						linkPart += `\n  Failed hyperlinks: ${JSON.stringify(failedLinks)}`;
+					}
+				}
 				const nodeLine = fmtNode(result.node);
-				return ok(`Text updated${stylePart}${bindPart}${nodeLine ? `\n  ${nodeLine}` : ""}`);
+				return ok(`Text updated${stylePart}${bindPart}${linkPart}${nodeLine ? `\n  ${nodeLine}` : ""}`);
 			} catch (error) {
 				logger.error({ error }, "Failed to set text content");
 				return err(
@@ -1343,6 +1368,154 @@ return {
 				return ok(text);
 			} catch (error) {
 				return err(error instanceof Error ? error.message : String(error));
+			}
+		},
+	);
+
+	// Tool: Find nodes by name or type (search without tree expansion)
+	server.tool(
+		"figma_find_node",
+		`Search the current page (or a specific page) for nodes matching a name substring and/or node type. Returns a flat list of matches with breadcrumb paths — use this INSTEAD of recursive figma_get_file_data calls to locate nodes.
+
+Typical workflow: figma_find_node query="Button" → get node IDs → figma_inspect nodeId="..." for detailed properties.
+
+Returns per match: id, name, type, size, parent info, path from page root, and first 80 characters of text content for TEXT nodes. Capped at 50 results.`,
+		{
+			query: z.string().optional().describe("Name substring to search for. Omit to match all nodes (useful with nodeType filter)."),
+			nodeType: z.enum([
+				"FRAME", "GROUP", "COMPONENT", "COMPONENT_SET", "INSTANCE",
+				"TEXT", "RECTANGLE", "ELLIPSE", "LINE", "POLYGON", "STAR",
+				"VECTOR", "BOOLEAN_OPERATION", "SECTION", "STICKY", "SHAPE_WITH_TEXT",
+				"CONNECTOR", "STAMP", "HIGHLIGHT", "WASHI_TAPE", "TABLE",
+			]).optional().describe("Filter by node type. Omit to match any type."),
+			caseSensitive: coerceBool().optional().default(false).describe("Case-sensitive name matching (default: false)"),
+			includeChildren: coerceBool().optional().default(false).describe("Include up to 20 direct children per result (default: false)"),
+			pageId: z.string().optional().describe("Search a specific page by ID. Omit to search current page."),
+		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		async ({ query, nodeType, caseSensitive, includeChildren, pageId }) => {
+			try {
+				const connector = await getDesktopConnector();
+
+				const script = `
+var query = ${JSON.stringify(query || "")};
+var nodeType = ${JSON.stringify(nodeType || "")};
+var caseSensitive = ${JSON.stringify(!!caseSensitive)};
+var includeChildren = ${JSON.stringify(!!includeChildren)};
+var pageId = ${JSON.stringify(pageId || "")};
+var MAX_RESULTS = 50;
+var MAX_CHILDREN = 20;
+
+var page = pageId
+	? await figma.getNodeByIdAsync(pageId)
+	: figma.currentPage;
+if (!page || page.type !== 'PAGE') return { success: false, error: 'Page not found: ' + (pageId || 'current') };
+
+var results = [];
+var searchQuery = caseSensitive ? query : query.toLowerCase();
+
+function matchNode(node) {
+	if (nodeType && node.type !== nodeType) return false;
+	if (!query) return true;
+	var name = caseSensitive ? node.name : node.name.toLowerCase();
+	return name.indexOf(searchQuery) !== -1;
+}
+
+function getPath(node) {
+	var parts = [];
+	var current = node.parent;
+	while (current && current.type !== 'PAGE' && current.type !== 'DOCUMENT') {
+		parts.unshift(current.name);
+		current = current.parent;
+	}
+	return parts.join(' > ');
+}
+
+function summarizeNode(node) {
+	var info = {
+		id: node.id, name: node.name, type: node.type,
+		width: node.width !== undefined ? Math.round(node.width) : undefined,
+		height: node.height !== undefined ? Math.round(node.height) : undefined,
+	};
+	if (node.parent) info.parent = { id: node.parent.id, name: node.parent.name, type: node.parent.type };
+	info.path = getPath(node);
+	if (node.type === 'TEXT' && node.characters) info.characters = node.characters.substring(0, 80);
+	if (node.type === 'INSTANCE') {
+		try { if (node.mainComponent) info.componentName = node.mainComponent.name; } catch(e) {}
+	}
+	return info;
+}
+
+function summarizeChild(node) {
+	var info = { id: node.id, name: node.name, type: node.type };
+	if (node.width !== undefined) info.width = Math.round(node.width);
+	if (node.height !== undefined) info.height = Math.round(node.height);
+	if (node.type === 'TEXT' && node.characters) info.characters = node.characters.substring(0, 80);
+	return info;
+}
+
+var allNodes = page.findAll(function(n) { return matchNode(n); });
+
+for (var i = 0; i < Math.min(allNodes.length, MAX_RESULTS); i++) {
+	var node = allNodes[i];
+	var entry = summarizeNode(node);
+	if (includeChildren && 'children' in node && node.children.length > 0) {
+		entry.children = [];
+		for (var c = 0; c < Math.min(node.children.length, MAX_CHILDREN); c++) {
+			entry.children.push(summarizeChild(node.children[c]));
+		}
+		if (node.children.length > MAX_CHILDREN) entry.childrenTruncated = node.children.length;
+	}
+	results.push(entry);
+}
+
+return {
+	success: true,
+	page: { id: page.id, name: page.name },
+	totalMatches: allNodes.length,
+	returned: results.length,
+	results: results
+};`;
+
+				const raw = await connector.executeCodeViaUI(script, 10000);
+				if (raw.error) throw new Error(raw.error);
+
+				const r = raw.result ?? raw;
+				if (!r.success) throw new Error(r.error || "Search failed");
+
+				// Format as human-readable text
+				const lines: string[] = [];
+				lines.push(`Found ${r.totalMatches} match${r.totalMatches === 1 ? "" : "es"} on page "${r.page?.name}"${r.totalMatches > r.returned ? ` (showing first ${r.returned})` : ""}`);
+				lines.push("");
+
+				for (const node of r.results) {
+					const size = node.width !== undefined ? `${node.width}x${node.height}` : "";
+					const path = node.path ? `  path: ${node.path}` : "";
+					lines.push(`${node.id}  "${node.name}"  ${node.type}  ${size}`);
+					if (path) lines.push(path);
+					if (node.parent) lines.push(`  parent: ${node.parent.id} "${node.parent.name}" (${node.parent.type})`);
+					if (node.characters) lines.push(`  text: "${node.characters}${node.characters.length >= 80 ? "…" : ""}"`);
+					if (node.componentName) lines.push(`  component: "${node.componentName}"`);
+
+					if (node.children) {
+						lines.push(`  children (${node.childrenTruncated ? `${node.children.length} of ${node.childrenTruncated}` : node.children.length}):`);
+						for (const child of node.children) {
+							const cSize = child.width !== undefined ? `${child.width}x${child.height}` : "";
+							let childLine = `    ${child.id}  "${child.name}"  ${child.type}  ${cSize}`;
+							if (child.characters) childLine += `  "${child.characters}${child.characters.length >= 80 ? "…" : ""}"`;
+							lines.push(childLine);
+						}
+					}
+					lines.push("");
+				}
+
+				return ok(lines.join("\n").trimEnd());
+			} catch (error) {
+				logger.error({ error }, "Failed to find nodes");
+				return err(
+					error instanceof Error ? error.message : String(error),
+					"Make sure you're connected to a Figma file. Use figma_connection action='status' to check.",
+				);
 			}
 		},
 	);

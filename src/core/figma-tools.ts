@@ -850,7 +850,9 @@ export function registerFigmaAPITools(
 
 	server.tool(
 		"figma_get_file_data",
-		"Get file structure and document tree. WARNING: Can consume large tokens. Start with verbosity='summary' and depth=1. Use scope='plugin' for plugin development (filtered to IDs, structure, and plugin data; allows depth up to 5). NOT for component descriptions (use figma_get_component). Batch-compatible.",
+		`DEPRECATED for single-node reads — use figma_inspect instead (returns more data with variable resolution in one call). Use figma_context for design system overviews. Use figma_find_node to locate nodes by name/type.
+
+Only use this tool when you specifically need: (1) raw REST API tree structure with pagination, (2) scope='plugin' for plugin development, or (3) full tree dumps beyond figma_inspect's depth=3 limit. WARNING: Can consume large tokens. Start with verbosity='summary' and depth=1. Batch-compatible.`,
 		{
 			fileUrl: z
 				.string()
@@ -3081,7 +3083,7 @@ export function registerFigmaAPITools(
 	// Tool 11: Get Styles
 	server.tool(
 		"figma_get_styles",
-		"Get all styles (color, text, effects, grids) from a Figma file with optional code exports. Use when user asks for: text styles, color palette, design system styles, typography, or style documentation. Returns organized style definitions with resolved values. NOT for design tokens/variables (use figma_get_variables). Set enrich=true for CSS/Tailwind/Sass code examples. Supports verbosity control to manage payload size. Batch-compatible.",
+		"Get all styles (color, text, effects, grids) from a Figma file with optional code exports. Retrieves library/remote styles when the Desktop Bridge plugin is connected (uses Plugin API), with REST API as fallback. Use when user asks for: text styles, color palette, design system styles, typography, or style documentation. Returns organized style definitions with resolved values. NOT for design tokens/variables (use figma_get_variables). Set enrich=true for CSS/Tailwind/Sass code examples. Supports verbosity control to manage payload size. Batch-compatible.",
 		{
 			fileUrl: z
 				.string()
@@ -3116,43 +3118,52 @@ export function registerFigmaAPITools(
 		},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async ({ fileUrl, verbosity, enrich, include_usage, include_exports, export_formats }) => {
-			try {
-				let api;
-				try {
-					api = await getFigmaAPI();
-				} catch (apiError) {
-					const errorMessage = apiError instanceof Error ? apiError.message : String(apiError);
-					throw new Error(
-						`Cannot retrieve styles. REST API authentication required.\n` +
-						`Error: ${errorMessage}\n\n` +
-						`To fix:\n` +
-						`1. Local mode: Set FIGMA_ACCESS_TOKEN environment variable\n` +
-						`2. Cloud mode: Authenticate via OAuth`
-					);
-				}
+		try {
+			const url = fileUrl || getCurrentUrl();
+			if (!url) {
+				throw new Error(
+					"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode)."
+				);
+			}
 
-				const url = fileUrl || getCurrentUrl();
-				if (!url) {
-					throw new Error(
-						"No Figma file URL available. Pass the fileUrl parameter, call figma_navigate (CDP mode), or ensure the Desktop Bridge plugin is connected (WebSocket mode)."
-					);
-				}
-
-				const fileKey = extractFileKey(url);
-				if (!fileKey) {
-					throw new Error(`Invalid Figma URL: ${url}`);
-				}
+			const fileKey = extractFileKey(url);
+			if (!fileKey) {
+				throw new Error(`Invalid Figma URL: ${url}`);
+			}
 
 			logger.info({ fileKey, verbosity, enrich }, "Fetching styles");
 
-			// Get styles via REST API
-			const stylesData = await api.getStyles(fileKey);
-			let styles = stylesData.meta?.styles || [];
+			// Try plugin bridge first (includes library/remote styles)
+			let styles: any[] = [];
+			let source = 'api';
+			try {
+				const desktopConnector = getDesktopConnector ? await getDesktopConnector() : null;
+				if (desktopConnector && typeof desktopConnector.getLocalStyles === 'function') {
+					const pluginResult = await desktopConnector.getLocalStyles();
+					if (pluginResult.success && pluginResult.data && pluginResult.data.length > 0) {
+						styles = pluginResult.data;
+						source = 'plugin';
+						logger.info({ styleCount: styles.length }, 'Retrieved styles via plugin bridge');
+					}
+				}
+			} catch (pluginError) {
+				logger.info({ error: pluginError }, 'Plugin bridge styles unavailable, falling back to REST API');
+			}
 
-			logger.info(
-				{ styleCount: styles.length },
-				"Successfully retrieved styles via REST API"
-			);
+			// Fall back to REST API if plugin didn't return styles
+			if (styles.length === 0) {
+				try {
+					const api = await getFigmaAPI();
+					const stylesData = await api.getStyles(fileKey);
+					styles = stylesData.meta?.styles || [];
+					source = 'api';
+					logger.info({ styleCount: styles.length }, 'Retrieved styles via REST API');
+				} catch (apiError) {
+					if (source !== 'plugin') {
+						throw new Error('Could not retrieve styles from plugin bridge or REST API. Ensure the Desktop Bridge plugin is running or set FIGMA_ACCESS_TOKEN.');
+					}
+				}
+			}
 
 
 				// Apply verbosity filtering
@@ -3209,17 +3220,20 @@ export function registerFigmaAPITools(
 					);
 				}
 
-				const finalResponse: Record<string, unknown> = {
-					fileKey,
-					styles,
-					totalStyles: styles.length,
-					verbosity: verbosity || "standard",
-					enriched: enrich || false,
-				};
 
-				if (styles.length === 0) {
-					finalResponse.hint = "No styles found in this file. For library/remote styles, use figma_get_library_components with type=\x27style\x27.";
-				}
+			const finalResponse: Record<string, unknown> = {
+				fileKey,
+				styles,
+				totalStyles: styles.length,
+				source,
+				verbosity: verbosity || "standard",
+				enriched: enrich || false,
+			};
+
+			if (styles.length === 0) {
+				finalResponse.hint = "No styles found. If the file uses library/remote styles, ensure the Desktop Bridge plugin is running.";
+			}
+
 
 				// Use adaptive response to prevent context exhaustion
 				return adaptiveResponse(finalResponse, {

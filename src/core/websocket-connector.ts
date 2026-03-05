@@ -175,15 +175,21 @@ export class WebSocketConnector implements IFigmaConnector {
   ): Promise<any> {
     const params: any = { nodeId, propertyName, propertyType: type, defaultValue };
     if (options?.preferredValues) params.preferredValues = options.preferredValues;
+    if (options?.targetNodeId) params.targetNodeId = options.targetNodeId;
+    if (options?.targetProperty) params.targetProperty = options.targetProperty;
     return this.wsServer.sendCommand('ADD_COMPONENT_PROPERTY', params);
   }
-
   async editComponentProperty(nodeId: string, propertyName: string, newValue: any): Promise<any> {
     return this.wsServer.sendCommand('EDIT_COMPONENT_PROPERTY', { nodeId, propertyName, newValue });
   }
 
   async deleteComponentProperty(nodeId: string, propertyName: string): Promise<any> {
     return this.wsServer.sendCommand('DELETE_COMPONENT_PROPERTY', { nodeId, propertyName });
+  }
+
+
+  async wireComponentProperty(targetNodeId: string, propertyName: string, targetProperty: string = 'characters'): Promise<any> {
+    return this.wsServer.sendCommand('WIRE_COMPONENT_PROPERTY', { targetNodeId, propertyName, targetProperty });
   }
 
   async instantiateComponent(componentKey: string, options?: any): Promise<any> {
@@ -263,10 +269,11 @@ export class WebSocketConnector implements IFigmaConnector {
     textDecoration?: string;
     textCase?: string;
     variableBindings?: Array<{ field: string; variableId: string }>;
+    hyperlinks?: Array<{ start: number; end: number; type: string; value: string }>;
   }): Promise<any> {
     const params: any = { nodeId, text: characters };
     if (options) {
-      const passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'variableBindings'] as const;
+      const passthrough = ['fontSize', 'fontFamily', 'fontStyle', 'textAlignHorizontal', 'textAlignVertical', 'lineHeight', 'letterSpacing', 'textAutoResize', 'textDecoration', 'textCase', 'variableBindings', 'hyperlinks'] as const;
       for (const key of passthrough) {
         if ((options as any)[key] !== undefined) params[key] = (options as any)[key];
       }
@@ -295,6 +302,14 @@ export class WebSocketConnector implements IFigmaConnector {
 
   async setInstanceProperties(nodeId: string, properties: any): Promise<any> {
     return this.wsServer.sendCommand('SET_INSTANCE_PROPERTIES', { nodeId, properties });
+  }
+
+  async inspectNode(nodeId?: string, depth?: number): Promise<any> {
+    return this.wsServer.sendCommand('INSPECT_NODE', { nodeId: nodeId || null, depth: depth ?? 1 }, 30000);
+  }
+
+  async getLocalStyles(): Promise<any> {
+    return this.wsServer.sendCommand('GET_LOCAL_STYLES', {}, 30000);
   }
 
   // ============================================================================

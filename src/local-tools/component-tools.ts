@@ -158,10 +158,10 @@ export function registerComponentTools(deps: LocalToolDeps): void {
 	// Tool: Find Components (search, keys, or details — unified, includes overview)
 	server.tool(
 		"figma_find_components",
-		`Find components and get a design system overview. Start with verbosity='overview' to see what's available, then drill down.
+		`Find and search components in the current file. Use figma_context for design system overviews (replaces verbosity='overview').
 
 Verbosity levels:
-- "overview": Compact design system summary — categories, token collections, component/token counts. Minimal tokens. Use this first.
+- "overview": DEPRECATED — use figma_context instead (returns components + variables + styles in one call). Still works but redirects.
 - "keys" (default): Fast key+nodeId lookup from cache. Good for finding component keys before instantiation.
 - "summary": Search with paginated results, descriptions, and categories from design system manifest.
 - "details": Full component spec with properties, variants, tokens. Pass componentKey or componentName.`,
@@ -587,20 +587,23 @@ After instantiating components, use figma_screenshot to verify the result looks 
 		"figma_component_property",
 		`Manage component properties and descriptions. Actions:
 - list: List all properties on a component/instance. For INSTANCE nodes, returns overridable properties (text overrides, component properties, variant props) with current values. For COMPONENT/COMPONENT_SET nodes, returns property definitions.
-- add: Add a new property (BOOLEAN, TEXT, INSTANCE_SWAP, VARIANT). Requires: type, defaultValue.
+- add: Add a new property (BOOLEAN, TEXT, INSTANCE_SWAP, VARIANT). Requires: type, defaultValue. For TEXT properties, pass targetNodeId to auto-wire the property to a text layer so it actually controls that layer's content. Without wiring, the property exists but is disconnected.
+- wire: Connect an existing component property to a layer. Use this to wire a TEXT property to a text node's 'characters', a BOOLEAN to a layer's 'visible', or an INSTANCE_SWAP to 'mainComponent'. Requires: propertyName (full name with suffix), targetNodeId, and optionally targetProperty.
 - edit: Update name/defaultValue/preferredValues. Requires: newValue object.
 - delete: Remove a property (not VARIANT types). Destructive.
 - set_description: Set description text on a component, component set, or style. Supports plain text and markdown.
 
-Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'). Requires Desktop Bridge.`,
+Use the full property name with suffix for edit/delete/wire (e.g. 'Show Icon#123:456'). Requires Desktop Bridge.`,
 		{
-			action: z.enum(["list", "add", "edit", "delete", "set_description"]).describe("Operation to perform"),
-			nodeId: z.string().describe("Component or component set node ID"),
-			propertyName: z.string().optional().describe("Property name (required for add/edit/delete, with suffix for edit/delete, e.g. 'Show Icon#123:456')"),
+			action: z.enum(["list", "add", "edit", "delete", "wire", "set_description"]).describe("Operation to perform"),
+			nodeId: z.string().describe("Component or component set node ID (not needed for wire action)"),
+			propertyName: z.string().optional().describe("Property name (required for add/edit/delete/wire, with suffix for edit/delete/wire, e.g. 'Show Icon#123:456')"),
 			type: z.enum(["BOOLEAN", "TEXT", "INSTANCE_SWAP", "VARIANT"]).optional()
 				.describe("Property type (add only)"),
 			defaultValue: z.union([z.string(), z.coerce.number(), coerceBool()]).optional()
 				.describe("Default value (add only)"),
+			targetNodeId: z.string().optional().describe("Wire the property to this node. For add: auto-wires after creation. For wire: the target layer node ID. For TEXT properties, pass the text layer's node ID to connect it."),
+			targetProperty: z.string().optional().describe("Which property to wire on the target node (default: 'characters' for text layers). Other options: 'visible' for boolean, 'mainComponent' for instance swap."),
 			newValue: jsonObject(z.object({
 				name: z.string().optional().describe("New name for the property"),
 				defaultValue: z.union([z.string(), z.coerce.number(), coerceBool()]).optional().describe("New default value"),
@@ -613,12 +616,11 @@ Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'
 			descriptionMarkdown: z.string().optional().describe("Markdown description (set_description only)"),
 		},
 		{ readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-		async ({ action, nodeId, propertyName, type, defaultValue, newValue, description, descriptionMarkdown }) => {
+		async ({ action, nodeId, propertyName, type, defaultValue, newValue, description, descriptionMarkdown, targetNodeId, targetProperty }) => {
 			const errorResponse = (msg: string) => ({
 				content: [{ type: "text" as const, text: JSON.stringify({ error: msg }) }],
 				isError: true as const,
 			});
-
 			try {
 				const connector = await getDesktopConnector();
 
@@ -680,13 +682,31 @@ Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'
 					case "add": {
 						if (!propertyName) return errorResponse("add requires propertyName");
 						if (!type || defaultValue === undefined) return errorResponse("add requires type and defaultValue");
-						const result = await connector.addComponentProperty(nodeId, propertyName, type, defaultValue);
+						const opts: any = {};
+						if (targetNodeId) opts.targetNodeId = targetNodeId;
+						if (targetProperty) opts.targetProperty = targetProperty;
+						const result = await connector.addComponentProperty(nodeId, propertyName, type, defaultValue, Object.keys(opts).length > 0 ? opts : undefined);
 						if (!result.success) throw new Error(result.error || "Failed to add property");
 						return {
 							content: [{ type: "text" as const, text: JSON.stringify({
 								success: true, message: "Component property added",
 								propertyName: result.propertyName,
-								hint: "The property name includes a unique suffix. Use the full name for editing/deleting.",
+								...(result.wiredTo && { wiredTo: result.wiredTo }),
+								hint: result.wiredTo
+									? "Property created and wired to target node. The property name includes a unique suffix. Use the full name for editing/deleting."
+									: "The property name includes a unique suffix. Use the full name for editing/deleting. For TEXT properties, wire to a text layer using action 'wire' to connect the property.",
+							}) }],
+						};
+					}
+					case "wire": {
+						if (!propertyName) return errorResponse("wire requires propertyName (full name with suffix, e.g. 'Label#123:456')");
+						if (!targetNodeId) return errorResponse("wire requires targetNodeId (the layer to connect the property to)");
+						const result = await connector.wireComponentProperty(targetNodeId, propertyName, targetProperty || 'characters');
+						if (!result.success) throw new Error(result.error || "Failed to wire property");
+						return {
+							content: [{ type: "text" as const, text: JSON.stringify({
+								success: true, message: "Component property wired to layer",
+								wiredTo: result.wiredTo,
 							}) }],
 						};
 					}
@@ -735,6 +755,7 @@ Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'
 						error: error instanceof Error ? error.message : String(error),
 						hint: action === "add" ? "Cannot add properties to variant components. Add to the parent component set instead."
 							: action === "delete" ? "Cannot delete VARIANT properties. Only BOOLEAN, TEXT, and INSTANCE_SWAP can be deleted."
+							: action === "wire" ? "Make sure the propertyName includes the full suffix (e.g. 'Label#123:456') and targetNodeId points to a valid layer inside the component."
 							: action === "set_description" ? "Make sure the node supports descriptions (components, component sets, styles)"
 							: undefined,
 					}) }],
@@ -743,7 +764,6 @@ Use the full property name with suffix for edit/delete (e.g. 'Show Icon#123:456'
 			}
 		},
 	);
-
 	// Tool: Arrange Component Set (Professional Layout with Native Visualization)
 	server.tool(
 		"figma_arrange_component_set",

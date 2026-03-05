@@ -982,18 +982,13 @@ Actions:
 		},
 	);
 
-	// Tool: Get current user selection in Figma
+	// Tool: Get current user selection in Figma (DEPRECATED)
 	server.tool(
 		"figma_get_selection",
-		"Get the currently selected nodes in Figma. Returns node IDs, names, types, and dimensions. WebSocket-only — requires Desktop Bridge plugin. Use this to understand what the user is pointing at instead of asking them to describe it.",
-		{
-			verbose: coerceBool()
-				.optional()
-				.default(false)
-				.describe("If true, includes fill colors, stroke colors, applied styles, and variable bindings for each selected node. Use when you need to inspect visual properties, not just structure."),
-		},
+		"DEPRECATED — use figma_inspect instead (omit nodeId to inspect current selection). figma_inspect returns full node properties with variable resolution and also includes otherSelected for multi-selection. This tool only returns basic IDs/names/types.",
+		{},
 		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-		async ({ verbose }) => {
+		async () => {
 			try {
 				const wsServer = getWsServer();
 				let selection = wsServer?.getCurrentSelection() ?? null;
@@ -1047,46 +1042,12 @@ Actions:
 					};
 				}
 
-				let result: Record<string, any> = {
+				const result: Record<string, any> = {
 					selection: selection.nodes,
 					count: selection.count,
 					page: selection.page,
 					timestamp: selection.timestamp,
 				};
-
-				// If verbose, fetch additional details for selected nodes
-				if (verbose && selection.nodes.length > 0 && selection.nodes.length <= 10) {
-					try {
-						const connector = await getDesktopConnector();
-						const nodeIds = selection.nodes.map((n: any) => `"${n.id}"`).join(",");
-						const details = await connector.executeCodeViaUI(
-							`var ids = [${nodeIds}];
-							var results = [];
-							for (var i = 0; i < ids.length; i++) {
-								var node = await figma.getNodeByIdAsync(ids[i]);
-								if (!node) continue;
-								var info = { id: node.id, name: node.name, type: node.type };
-								if ('fills' in node) info.fills = node.fills;
-								if ('strokes' in node) info.strokes = node.strokes;
-								if ('effects' in node) info.effects = node.effects;
-								if ('characters' in node) info.characters = node.characters;
-								if ('fontSize' in node) info.fontSize = node.fontSize;
-								if ('fontName' in node) info.fontName = node.fontName;
-								if ('opacity' in node) info.opacity = node.opacity;
-								if ('cornerRadius' in node) info.cornerRadius = node.cornerRadius;
-								if ('componentProperties' in node) info.componentProperties = node.componentProperties;
-								results.push(info);
-							}
-							return results;`,
-							10000,
-						);
-						if (details.success && details.result) {
-							result.details = details.result;
-						}
-					} catch (err) {
-						result.detailsError = "Could not fetch detailed properties";
-					}
-				}
 
 				return {
 					content: [{
@@ -1101,6 +1062,65 @@ Actions:
 						text: JSON.stringify({
 							error: error instanceof Error ? error.message : String(error),
 							message: "Failed to get selection",
+						}),
+					}],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// Tool: Deep node inspection with data stripping
+	server.tool(
+		"figma_inspect",
+		`Deep-inspect a Figma node in a single call. Returns structure, visual properties, layout, text, component info, variable bindings (resolved to human-readable names), and children — all with aggressive data stripping (defaults omitted, fills simplified, text truncated).
+
+THE primary read tool. Use this instead of get_selection, edit_node(inspect), or get_file_data for reading node properties. Falls back to current selection if no nodeId provided — when multiple nodes are selected, inspects the first and returns otherSelected with IDs/names/types of the rest.
+
+Children >20 are truncated to first 10 with a childCount and hint. COMPONENT_SET variants >20 show first 20 with variantsTruncated flag.
+
+IMPORTANT — two DIFFERENT binding systems in the output:
+1. Variable bindings (vars/varIds): individual design tokens bound to specific properties via Figma's Variables feature. Root node shows resolved "collection/variable-name" in 'vars'. Children show raw IDs in 'varIds' — cross-reference with figma_get_variables if you need names. Example: vars: { fills: "Colors/Primary", itemSpacing: "Spacing/md" }. To bind: use figma_set_appearance/figma_set_text/figma_set_layout with variableBindings param.
+2. Style bindings (fillStyleId/strokeStyleId/textStyleId/effectStyleId): references to reusable style PRESETS that bundle multiple properties. A textStyleId sets font+size+weight+lineHeight together. A fillStyleId sets the entire fill stack. These are Figma Styles, not Variables. To apply: use figma_set_text textStyleId param or figma_set_appearance fillStyleId param.
+These are independent — a node can have BOTH a textStyleId (typography preset) AND variable bindings on individual fills.
+
+For large trees, start with depth=0 to see childCount, then inspect specific children by nodeId.`,
+		{
+			nodeId: z.string().optional().describe("Node ID to inspect. If omitted, inspects the first selected node."),
+			depth: z.coerce.number().min(0).max(3).optional().default(1).describe("Children depth 0-3 (default 1). 0 = node only with childCount, 1 = direct children, 2-3 = deeper tree."),
+		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		async ({ nodeId, depth }) => {
+			try {
+				const connector = await getDesktopConnector();
+				const result = await connector.inspectNode(nodeId, depth);
+
+				if (!result.success) {
+					return {
+						content: [{
+							type: "text",
+							text: JSON.stringify({
+								error: result.error || "Inspection failed",
+								hint: "Check that the node exists and the Desktop Bridge plugin is running.",
+							}),
+						}],
+						isError: true,
+					};
+				}
+
+				return {
+					content: [{
+						type: "text",
+						text: JSON.stringify(result.data),
+					}],
+				};
+			} catch (error) {
+				return {
+					content: [{
+						type: "text",
+						text: JSON.stringify({
+							error: error instanceof Error ? error.message : String(error),
+							message: "Failed to inspect node",
 						}),
 					}],
 					isError: true,
@@ -1177,6 +1197,130 @@ return {
 					content: [{ type: "text" as const, text: JSON.stringify({
 						error: error instanceof Error ? error.message : String(error),
 					}) }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// Tool: Consolidated design system context
+	server.tool(
+		"figma_context",
+		`Get a consolidated overview of the current file's design system in one call. Returns component inventory, variable collections, and style summaries from cache. Replaces the 3-call pattern of figma_find_components + figma_get_variables + figma_get_styles.
+
+Sections parameter controls which data to include. Cache is warmed automatically on file connection; if cold, data is fetched from the bridge plugin.`,
+		{
+			sections: z.array(z.enum(["components", "variables", "styles"])).optional().default(["components", "variables", "styles"]).describe('Which sections to include (default: all). Use ["components"] to get only component data, etc.'),
+			fileUrl: z.string().optional().describe("Figma file URL. If omitted, uses the currently connected file."),
+		},
+		{ readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+		async ({ sections, fileUrl }) => {
+			try {
+				const url = fileUrl || getCurrentUrl();
+				if (!url) {
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify({ error: "No file URL. Connect to a Figma file first or provide fileUrl." }) }],
+						isError: true,
+					};
+				}
+				const fileKey = extractFileKey(url);
+				if (!fileKey) {
+					return {
+						content: [{ type: "text" as const, text: JSON.stringify({ error: "Could not extract file key from URL: " + url }) }],
+						isError: true,
+					};
+				}
+				const result: Record<string, any> = { fileKey };
+
+				// Components — from projectContextCache
+				if (sections.includes("components")) {
+					const ctx = await projectContextCache.get(fileKey);
+					if (ctx) {
+						result.components = {
+							total: ctx.components.total,
+							names: ctx.components.names,
+						};
+						result.componentSets = {
+							total: ctx.componentSets.total,
+							names: ctx.componentSets.names,
+						};
+					} else {
+						result.components = { total: 0, names: [], hint: "Cache cold. Open a file to build the component index." };
+					}
+				}
+
+				// Variables — from variablesCache
+				if (sections.includes("variables")) {
+					const cached = variablesCache.get(fileKey);
+					if (cached?.data) {
+						const data = cached.data;
+						// Extract collection summaries
+						if (data.collections) {
+							result.variables = {
+								collections: data.collections.map((c: any) => ({
+									id: c.id,
+									name: c.name,
+									modes: c.modes?.map((m: any) => m.name) || [],
+									variableCount: c.variableCount ?? c.variables?.length ?? 0,
+								})),
+								totalVariables: data.totalVariables ?? data.collections.reduce((sum: number, c: any) => sum + (c.variableCount ?? c.variables?.length ?? 0), 0),
+							};
+						} else {
+							result.variables = { totalVariables: 0, hint: "No variable data in cache." };
+						}
+					} else {
+						// Try projectContextCache as fallback
+						const ctx = await projectContextCache.get(fileKey);
+						if (ctx?.variables) {
+							result.variables = {
+								collections: ctx.variables.collections.map((c) => ({
+									id: c.id,
+									name: c.name,
+									variableCount: c.variableCount,
+									modeCount: c.modeCount,
+								})),
+								totalVariables: ctx.variables.totalVariables,
+								source: ctx.variables.source,
+							};
+						} else {
+							result.variables = { totalVariables: 0, hint: "Cache cold. Use figma_get_variables to populate." };
+						}
+					}
+				}
+
+				// Styles — from projectContextCache or API
+				if (sections.includes("styles")) {
+					const ctx = await projectContextCache.get(fileKey);
+					if (ctx?.styles) {
+						result.styles = ctx.styles;
+					} else {
+						// Fallback: fetch from API
+						try {
+							const api = await getFigmaAPI();
+							const styleData = await api.getStyles(fileKey);
+							if (styleData?.meta?.styles) {
+								const styles = styleData.meta.styles;
+								result.styles = {
+									colorCount: styles.filter((s: any) => s.style_type === "FILL").length,
+									textCount: styles.filter((s: any) => s.style_type === "TEXT").length,
+									effectCount: styles.filter((s: any) => s.style_type === "EFFECT").length,
+									gridCount: styles.filter((s: any) => s.style_type === "GRID").length,
+								};
+							} else {
+								result.styles = { colorCount: 0, textCount: 0, effectCount: 0, gridCount: 0 };
+							}
+						} catch {
+							result.styles = { hint: "Could not fetch styles. Ensure Figma API access." };
+						}
+					}
+				}
+
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify(result) }],
+				};
+			} catch (error) {
+				return {
+					content: [{ type: "text" as const, text: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }) }],
 					isError: true,
 				};
 			}

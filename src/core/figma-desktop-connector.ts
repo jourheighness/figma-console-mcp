@@ -1150,10 +1150,9 @@ export class FigmaDesktopConnector implements IFigmaConnector {
     propertyName: string,
     type: 'BOOLEAN' | 'TEXT' | 'INSTANCE_SWAP' | 'VARIANT',
     defaultValue: any,
-    options?: { preferredValues?: any[] }
+    options?: { preferredValues?: any[]; targetNodeId?: string; targetProperty?: string }
   ): Promise<any> {
     logger.info({ nodeId, propertyName, type }, 'Adding component property via plugin UI');
-
     const frame = await this.findPluginUIFrame();
 
     try {
@@ -1211,6 +1210,25 @@ export class FigmaDesktopConnector implements IFigmaConnector {
       return result;
     } catch (error) {
       logger.error({ error, nodeId, propertyName }, 'Delete component property failed');
+      throw error;
+    }
+  }
+
+
+  async wireComponentProperty(targetNodeId: string, propertyName: string, targetProperty: string = 'characters'): Promise<any> {
+    logger.info({ targetNodeId, propertyName, targetProperty }, 'Wiring component property via plugin UI');
+
+    const frame = await this.findPluginUIFrame();
+
+    try {
+      const result = await frame.evaluate(
+        `window.wireComponentProperty(${JSON.stringify(targetNodeId)}, ${JSON.stringify(propertyName)}, ${JSON.stringify(targetProperty)})`
+      );
+
+      logger.info({ success: result.success, wiredTo: result.wiredTo }, 'Property wired');
+      return result;
+    } catch (error) {
+      logger.error({ error, targetNodeId, propertyName }, 'Wire component property failed');
       throw error;
     }
   }
@@ -1466,6 +1484,7 @@ export class FigmaDesktopConnector implements IFigmaConnector {
     textCase?: string;
     textStyleId?: string;
     variableBindings?: Array<{ field: string; variableId: string }>;
+    hyperlinks?: Array<{ start: number; end: number; type: string; value: string }>;
   }): Promise<any> {
     logger.info({ nodeId, textLength: text?.length ?? 0 }, 'Setting text content via plugin UI');
 
@@ -1575,6 +1594,40 @@ export class FigmaDesktopConnector implements IFigmaConnector {
       return result;
     } catch (error) {
       logger.error({ error, nodeId }, 'Set instance properties failed');
+      throw error;
+    }
+  }
+
+  /** Deep-inspect a node with data stripping, variable resolution, and children traversal. */
+  async inspectNode(nodeId?: string, depth?: number): Promise<any> {
+    logger.info({ nodeId, depth }, 'Inspecting node via plugin UI');
+
+    const frame = await this.findPluginUIFrame();
+
+    try {
+      const result = await frame.evaluate(
+        `window.inspectNode(${JSON.stringify(nodeId || null)}, ${JSON.stringify(depth ?? 1)})`
+      );
+
+      logger.info({ success: result.success }, 'Node inspected');
+      return result;
+    } catch (error) {
+      logger.error({ error, nodeId }, 'Inspect node failed');
+      throw error;
+    }
+  }
+
+  async getLocalStyles(): Promise<any> {
+    logger.info('Getting local styles via plugin UI');
+    const frame = await this.findPluginUIFrame();
+    try {
+      const result = await frame.evaluate(
+        `window.sendPluginCommand('GET_LOCAL_STYLES', {}, 30000).catch(function(err) { return { success: false, error: err.message || String(err) }; })`
+      );
+      logger.info({ success: result.success }, 'Local styles retrieved');
+      return result;
+    } catch (error) {
+      logger.error({ error }, 'Get local styles failed');
       throw error;
     }
   }
