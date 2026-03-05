@@ -192,14 +192,16 @@ These cached resources provide instant project context — read them first to av
 - Style keys from the library work DIRECTLY as fillStyleId/textStyleId/effectStyleId — the plugin resolves keys internally.
 - DO NOT inspect random nodes to discover colors/fonts/tokens. The caches above have everything indexed.
 
-### Figma Layout Rules
-- Smart defaults are applied automatically when creating nodes:
-  - Auto-layout frames HUG content on both axes by default (like Figma's "Add auto layout").
-  - Text nodes auto-size to content (WIDTH_AND_HEIGHT) unless width is set.
-  - Text inside auto-layout: defaults to FILL horizontal + HUG vertical (wraps to parent width).
-  - Child auto-layout frames inside auto-layout: HUG both axes (don't squish nested layouts).
-  - Override any default by setting the property explicitly.
-- These defaults only apply to figma_create_nodes/scaffolding. For existing nodes, set sizing explicitly via figma_set_layout.
+### Figma Layout Rules — Smart Defaults
+Smart defaults apply to BOTH figma_create_nodes AND figma_set_layout (when enabling auto-layout):
+- Auto-layout frames HUG content on both axes (primaryAxisSizingMode/counterAxisSizingMode = AUTO).
+- strokesIncludedInLayout defaults to true (CSS border-box behavior).
+- Text nodes auto-size to content (WIDTH_AND_HEIGHT) unless width is set.
+- Text inside auto-layout: FILL horizontal + HUG vertical (wraps to parent width).
+- Child auto-layout frames inside auto-layout: HUG both axes (don't squish nested layouts).
+- Shadow effects default to: color=#00000040, offset={0,0}, radius=0 (sharp) — only spread needed for focus rings.
+- All defaults overridable by setting the property explicitly.
+- You usually don't need to set width/height on auto-layout frames — they size to content.
 - GRID: children all stack at cell (0,0) by default. You MUST set gridColumnAnchorIndex + gridRowAnchorIndex on EACH child via figma_set_layout.
 - Creating a frame does NOT make it auto-layout. Set layoutMode explicitly.
 - Coordinates (x, y) are parent-relative. Section parents offset from page origin.

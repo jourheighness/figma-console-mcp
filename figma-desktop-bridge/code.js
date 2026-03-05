@@ -395,18 +395,27 @@ function applyNodeProperties(node, props, nodeType) {
     }
   }
 
+  // 8b. Additional auto-layout container properties
+  if (props.primaryAxisAlignItems) node.primaryAxisAlignItems = props.primaryAxisAlignItems;
+  if (props.counterAxisAlignItems) node.counterAxisAlignItems = props.counterAxisAlignItems;
+  if (props.layoutWrap) node.layoutWrap = props.layoutWrap;
+  if (props.counterAxisSpacing !== undefined) node.counterAxisSpacing = props.counterAxisSpacing;
+  if (props.strokesIncludedInLayout !== undefined) node.strokesIncludedInLayout = props.strokesIncludedInLayout;
+
   // 9. Smart defaults for auto-layout frames — apply BEFORE explicit overrides
   //    These ensure frames hug their content unless the caller specifies otherwise.
   var isAutoLayout = node.layoutMode && node.layoutMode !== 'NONE';
   if (isAutoLayout) {
     // Default: frame hugs content on both axes (like Figma UI "Add auto layout")
-    // primaryAxisSizingMode: AUTO = hug along layout direction
-    // counterAxisSizingMode: AUTO = hug perpendicular to layout direction
     if (props.primaryAxisSizingMode === undefined && props.width === undefined) {
       node.primaryAxisSizingMode = 'AUTO';
     }
     if (props.counterAxisSizingMode === undefined && props.height === undefined) {
       node.counterAxisSizingMode = 'AUTO';
+    }
+    // Default: strokes included in layout (border-box, matches CSS box-sizing)
+    if (props.strokesIncludedInLayout === undefined) {
+      node.strokesIncludedInLayout = true;
     }
   }
 

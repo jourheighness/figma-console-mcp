@@ -393,18 +393,22 @@ IMPORTANT: Drop shadow effects on frames require clipsContent=true on that frame
 				}
 
 				if (effects !== undefined) {
-					// Build effects array with proper Figma color format
+					// Build effects array with smart defaults and proper Figma color format
 					const effectsCode = effects.map(e => {
+						const isShadow = e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW';
 						const parts: string[] = [`type: '${e.type}'`, `visible: ${e.visible !== false}`];
-						if (e.radius !== undefined) parts.push(`radius: ${e.radius}`);
-						if (e.color) {
+						// Smart defaults for shadows: radius=0 (sharp), offset={0,0} (centered), color=black 25%
+						parts.push(`radius: ${e.radius ?? (isShadow ? 0 : 4)}`);
+						const effectColor = e.color || (isShadow ? '#00000040' : undefined);
+						if (effectColor) {
 							// Parse hex to Figma RGBA
-							parts.push(`color: (function(){ var h='${e.color}'.replace('#',''); var r=parseInt(h.substr(0,2),16)/255; var g=parseInt(h.substr(2,2),16)/255; var b=parseInt(h.substr(4,2),16)/255; var a=h.length>6?parseInt(h.substr(6,2),16)/255:1; return {r:r,g:g,b:b,a:a}; })()`);
+							parts.push(`color: (function(){ var h='${effectColor}'.replace('#',''); var r=parseInt(h.substr(0,2),16)/255; var g=parseInt(h.substr(2,2),16)/255; var b=parseInt(h.substr(4,2),16)/255; var a=h.length>6?parseInt(h.substr(6,2),16)/255:1; return {r:r,g:g,b:b,a:a}; })()`);
 						}
-						if (e.offset) parts.push(`offset: {x:${e.offset.x},y:${e.offset.y}}`);
+						// Default offset for shadows: {0,0} if not specified (needed for spread-only effects like focus rings)
+						if (isShadow) parts.push(`offset: {x:${e.offset?.x ?? 0},y:${e.offset?.y ?? 0}}`);
+						else if (e.offset) parts.push(`offset: {x:${e.offset.x},y:${e.offset.y}}`);
 						if (e.spread !== undefined) parts.push(`spread: ${e.spread}`);
 						// blendMode only valid on shadow effects, not blur effects
-						const isShadow = e.type === 'DROP_SHADOW' || e.type === 'INNER_SHADOW';
 						if (isShadow && e.blendMode) parts.push(`blendMode: '${e.blendMode}'`);
 						return `{${parts.join(',')}}`;
 					}).join(',');
@@ -1078,6 +1082,12 @@ On partial failure (e.g. bad child type mid-tree), returns what was created befo
 					counterAxisSizingMode: z.enum(["FIXED", "AUTO"]).optional().describe("Cross axis sizing"),
 					layoutSizingHorizontal: z.enum(["FIXED", "HUG", "FILL"]).optional(),
 					layoutSizingVertical: z.enum(["FIXED", "HUG", "FILL"]).optional(),
+					primaryAxisAlignItems: z.enum(["MIN", "CENTER", "MAX", "SPACE_BETWEEN"]).optional().describe("Main axis alignment"),
+					counterAxisAlignItems: z.enum(["MIN", "CENTER", "MAX", "BASELINE"]).optional().describe("Cross axis alignment"),
+					layoutWrap: z.enum(["NO_WRAP", "WRAP"]).optional().describe("Wrap mode"),
+					counterAxisSpacing: z.coerce.number().optional().describe("Cross-axis spacing (wrap mode)"),
+					clipsContent: coerceBool().optional().describe("Clip children to frame bounds (default: true)"),
+					strokesIncludedInLayout: coerceBool().optional().describe("Include strokes in layout (default: true for auto-layout)"),
 					cornerRadius: z.coerce.number().optional().describe("Corner radius"),
 					opacity: z.coerce.number().optional().describe("Opacity 0-1"),
 				}))
@@ -1152,6 +1162,11 @@ On partial failure (e.g. bad child type mid-tree), returns what was created befo
 **ABSOLUTE POSITIONING:** When layoutPositioning='ABSOLUTE', also set constraints to pin edges:
 - constraintHorizontal: 'MIN' (left), 'MAX' (right), 'STRETCH' (left+right stretch), 'CENTER', 'SCALE'
 - constraintVertical: 'MIN' (top), 'MAX' (bottom), 'STRETCH' (top+bottom stretch), 'CENTER', 'SCALE'
+
+**Smart defaults** when setting layoutMode on a non-auto-layout frame:
+- primaryAxisSizingMode/counterAxisSizingMode → AUTO (HUG content, not squish)
+- strokesIncludedInLayout → true (CSS border-box behavior)
+- Override any default by setting the property explicitly in the same call.
 
 **Shorthands** to save tokens:
 - \`padding\` sets all 4 sides; individual paddingTop/Right/Bottom/Left override
@@ -1256,6 +1271,17 @@ if (props.gap !== undefined) {
     if (props.itemSpacing === undefined) props.itemSpacing = props.gap;
     if (props.counterAxisSpacing === undefined) props.counterAxisSpacing = props.gap;
   }
+}
+
+// Smart defaults when enabling auto-layout on an existing frame
+var settingLayoutMode = props.layoutMode && props.layoutMode !== 'NONE';
+var wasAutoLayout = node.layoutMode && node.layoutMode !== 'NONE';
+if (settingLayoutMode && !wasAutoLayout) {
+  // Frame is becoming auto-layout for the first time — default to HUG both axes
+  if (props.primaryAxisSizingMode === undefined) props.primaryAxisSizingMode = 'AUTO';
+  if (props.counterAxisSizingMode === undefined) props.counterAxisSizingMode = 'AUTO';
+  // Default strokesIncludedInLayout=true (border-box, matches CSS behavior)
+  if (props.strokesIncludedInLayout === undefined) props.strokesIncludedInLayout = true;
 }
 
 // Container properties — must set layoutMode first
