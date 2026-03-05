@@ -636,6 +636,7 @@
       var scanFailures = 0; // Count of consecutive full-scan failures (no servers found)
       var isScanning = false;
       var rescanTimerId = null;
+      var knownActivePorts = {}; // ports that successfully connected before — scan these first
 
       // Backward-compat: ws and wsConnected reflect "at least one connection"
       var ws = null;
@@ -780,168 +781,182 @@
       }
 
       /**
+       * Try connecting to a single port. Returns via callbacks, no console spam control
+       * (browser always logs ERR_CONNECTION_REFUSED for failed WebSocket).
+       */
+      function tryConnectPort(port, onSuccess, onFail) {
+        try {
+          var testWs = new WebSocket('ws://localhost:' + port);
+          var timeout = setTimeout(function() {
+            if (testWs.readyState !== 1) { testWs.close(); }
+          }, 3000);
+          var settled = false;
+
+          testWs.onopen = function() {
+            clearTimeout(timeout);
+            if (settled) return;
+            settled = true;
+            onSuccess(testWs, port);
+          };
+          testWs.onerror = function() {
+            clearTimeout(timeout);
+            if (settled) return;
+            settled = true;
+            onFail(port);
+          };
+          testWs.onclose = function() {
+            clearTimeout(timeout);
+            if (settled) return;
+            settled = true;
+            onFail(port);
+          };
+        } catch (e) {
+          onFail(port);
+        }
+      }
+
+      /**
+       * Accept a successful connection: add to active list, attach handlers.
+       */
+      function acceptConnection(testWs, port) {
+        if (activeConnections.length >= MAX_ACTIVE_CONNECTIONS) {
+          testWs.close();
+          return;
+        }
+        knownActivePorts[port] = true;
+        activeConnections.push({ port: port, ws: testWs });
+        updateCompatState();
+        updateConnectionStatus();
+        console.log('[MCP Bridge] WebSocket connected to port ' + port + ' (' + activeConnections.length + ' server(s) total)');
+        attachWsHandlers(testWs, port);
+        initializeConnection(testWs, port);
+      }
+
+      /**
        * Scan the port range and connect to ALL active MCP servers.
-       * Reconnects forever with backoff (no max attempt limit).
+       * Strategy: first try known ports (previously connected), then full range.
+       * This minimizes ERR_CONNECTION_REFUSED console spam on rescans.
        */
       function wsScanAndConnect() {
         if (isScanning) return;
         isScanning = true;
 
-        var portsToTry = [];
-        for (var p = WS_PORT_RANGE_START; p <= WS_PORT_RANGE_END; p++) {
-          // Skip ports we're already connected to
-          if (!isPortConnected(p)) {
-            portsToTry.push(p);
+        // Phase 1: try known ports first (fast, minimal spam)
+        var knownPorts = [];
+        for (var kp in knownActivePorts) {
+          if (knownActivePorts.hasOwnProperty(kp) && !isPortConnected(Number(kp))) {
+            knownPorts.push(Number(kp));
           }
         }
 
-        if (portsToTry.length === 0) {
+        // Phase 2: full range (only ports not already connected or in known list)
+        var unknownPorts = [];
+        for (var p = WS_PORT_RANGE_START; p <= WS_PORT_RANGE_END; p++) {
+          if (!isPortConnected(p) && !knownActivePorts[p]) {
+            unknownPorts.push(p);
+          }
+        }
+
+        var allPorts = knownPorts.concat(unknownPorts);
+        if (allPorts.length === 0) {
           isScanning = false;
           return;
         }
 
-        console.log('[MCP Bridge] Scanning ports ' + WS_PORT_RANGE_START + '-' + WS_PORT_RANGE_END + ' for MCP servers...');
-        updateConnectionStatus();
-
+        // Try known ports first; only scan unknown ports if known ports didn't connect
         var foundAny = false;
-        var pending = portsToTry.length;
+        var knownPending = knownPorts.length;
+        var phase2Started = false;
 
-        portsToTry.forEach(function(port) {
-          try {
-            var testWs = new WebSocket('ws://localhost:' + port);
-
-            var timeout = setTimeout(function() {
-              if (testWs.readyState !== 1) {
-                testWs.close();
-              }
-            }, 3000);
-
-            testWs.onopen = function() {
-              clearTimeout(timeout);
-              foundAny = true;
-
-              // Enforce connection cap
-              if (activeConnections.length >= MAX_ACTIVE_CONNECTIONS) {
-                testWs.close();
-                pending--;
-                return;
-              }
-
-              // Add to active connections
-              activeConnections.push({ port: port, ws: testWs });
-              updateCompatState();
-              updateConnectionStatus();
-
-              console.log('[MCP Bridge] WebSocket connected to port ' + port + ' (' + activeConnections.length + ' server(s) total)');
-
-              // Attach handlers for this connection
-              attachWsHandlers(testWs, port);
-
-              // Send file identity and variables to this server
-              initializeConnection(testWs, port);
-
-              pending--;
-              if (pending <= 0) {
-                isScanning = false;
-                if (foundAny) {
-                  wsReconnectDelay = 500;
-                  scanFailures = 0;
-                  statusState.reconnectText = null;
-                  statusState.lastError = null;
-                  updateConnectionStatus();
-                }
-              }
-            };
-
-            testWs.onerror = function() {
-              clearTimeout(timeout);
-              pending--;
-              if (pending <= 0) {
-                isScanning = false;
-                if (!foundAny && activeConnections.length === 0) {
-                  // No servers found at all — retry with backoff (forever)
-                  scanFailures++;
-                  var delay = wsReconnectDelay;
-                  statusState.reconnectText = 'Scanning... (attempt ' + scanFailures + ', next in ' + Math.round(delay / 1000) + 's)';
-                  updateConnectionStatus();
-                  console.log('[MCP Bridge] No MCP server found, retrying in ' + delay + 'ms (attempt ' + scanFailures + ')');
-                  setTimeout(wsScanAndConnect, delay);
-                  wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, wsMaxReconnectDelay);
-                }
-              }
-            };
-
-            testWs.onclose = function() {
-              clearTimeout(timeout);
-              pending--;
-              if (pending <= 0 && !foundAny && activeConnections.length === 0) {
-                isScanning = false;
-                scanFailures++;
-                var delay = wsReconnectDelay;
-                statusState.reconnectText = 'Scanning... (attempt ' + scanFailures + ', next in ' + Math.round(delay / 1000) + 's)';
-                updateConnectionStatus();
-                setTimeout(wsScanAndConnect, delay);
-                wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, wsMaxReconnectDelay);
-              }
-            };
-          } catch (e) {
-            pending--;
+        function onScanComplete() {
+          isScanning = false;
+          if (foundAny) {
+            wsReconnectDelay = 500;
+            scanFailures = 0;
+            statusState.reconnectText = null;
+            statusState.lastError = null;
+          } else if (activeConnections.length === 0) {
+            scanFailures++;
+            var delay = wsReconnectDelay;
+            statusState.reconnectText = 'Retrying in ' + Math.round(delay / 1000) + 's...';
+            console.log('[MCP Bridge] No MCP servers found (attempt ' + scanFailures + '), retrying in ' + Math.round(delay / 1000) + 's');
+            setTimeout(wsScanAndConnect, delay);
+            wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, wsMaxReconnectDelay);
           }
-        });
+          updateConnectionStatus();
+        }
+
+        function startPhase2() {
+          if (phase2Started || unknownPorts.length === 0) {
+            if (!foundAny && knownPending <= 0) onScanComplete();
+            return;
+          }
+          phase2Started = true;
+          // If we already found a known port, skip full scan — no need to spam
+          if (foundAny) { onScanComplete(); return; }
+
+          console.log('[MCP Bridge] Scanning ports ' + WS_PORT_RANGE_START + '-' + WS_PORT_RANGE_END + '...');
+          var unknownPending = unknownPorts.length;
+          unknownPorts.forEach(function(port) {
+            tryConnectPort(port, function(ws, p) {
+              foundAny = true;
+              acceptConnection(ws, p);
+              unknownPending--;
+              if (unknownPending <= 0) onScanComplete();
+            }, function() {
+              unknownPending--;
+              if (unknownPending <= 0) onScanComplete();
+            });
+          });
+        }
+
+        if (knownPorts.length === 0) {
+          startPhase2();
+        } else {
+          knownPorts.forEach(function(port) {
+            tryConnectPort(port, function(ws, p) {
+              foundAny = true;
+              acceptConnection(ws, p);
+              knownPending--;
+              if (knownPending <= 0) startPhase2();
+            }, function() {
+              knownPending--;
+              if (knownPending <= 0) startPhase2();
+            });
+          });
+        }
       }
 
       /**
        * Reconnect a specific port that disconnected.
-       * Tries the same port up to 3 times, then falls back to full rescan.
+       * Tries the same port up to 5 times with increasing delay, then stops
+       * (periodic rescan will pick it back up if the server restarts).
        */
       function wsReconnectPort(port, attempt) {
         attempt = attempt || 1;
-        var maxPortAttempts = 3;
+        var maxPortAttempts = 5;
 
-        try {
-          var testWs = new WebSocket('ws://localhost:' + port);
-          var timeout = setTimeout(function() {
-            if (testWs.readyState !== 1) {
-              testWs.close();
-              if (attempt < maxPortAttempts) {
-                console.log('[MCP Bridge] Port ' + port + ' retry ' + (attempt + 1) + '/' + maxPortAttempts);
-                setTimeout(function() { wsReconnectPort(port, attempt + 1); }, 1000 * attempt);
-              } else {
-                console.log('[MCP Bridge] Port ' + port + ' unavailable after ' + maxPortAttempts + ' attempts, rescanning...');
-                statusState.lastError = 'Port ' + port + ' unavailable';
-                updateConnectionStatus();
-                wsScanAndConnect();
-              }
-            }
-          }, 2000);
-
-          testWs.onopen = function() {
-            clearTimeout(timeout);
-            activeConnections.push({ port: port, ws: testWs });
-            updateCompatState();
-            scanFailures = 0;
-            statusState.lastError = null;
+        tryConnectPort(port, function(ws, p) {
+          acceptConnection(ws, p);
+          scanFailures = 0;
+          statusState.lastError = null;
+          statusState.reconnectText = null;
+          updateConnectionStatus();
+        }, function() {
+          if (attempt < maxPortAttempts) {
+            var delay = Math.min(1000 * attempt, 5000);
+            statusState.reconnectText = 'Reconnecting to :' + port + ' (' + attempt + '/' + maxPortAttempts + ')...';
+            updateConnectionStatus();
+            setTimeout(function() { wsReconnectPort(port, attempt + 1); }, delay);
+          } else {
+            // Stop hammering — periodic rescan will find it if it comes back
+            console.log('[MCP Bridge] Port ' + port + ' unavailable after ' + maxPortAttempts + ' attempts, waiting for rescan');
+            statusState.lastError = 'Port ' + port + ' unavailable';
             statusState.reconnectText = null;
             updateConnectionStatus();
-            console.log('[MCP Bridge] Reconnected to port ' + port + ' (' + activeConnections.length + ' server(s) total)');
-            attachWsHandlers(testWs, port);
-            initializeConnection(testWs, port);
-          };
-
-          testWs.onerror = function() {
-            clearTimeout(timeout);
-            if (attempt < maxPortAttempts) {
-              setTimeout(function() { wsReconnectPort(port, attempt + 1); }, 1000 * attempt);
-            } else {
-              console.log('[MCP Bridge] Port ' + port + ' unavailable, rescanning...');
-              statusState.lastError = 'Port ' + port + ' unavailable';
-              updateConnectionStatus();
-              wsScanAndConnect();
-            }
-          };
-        } catch (e) {
-          wsScanAndConnect();
-        }
+            // Don't remove from knownActivePorts — rescan will still prefer it
+          }
+        });
       }
 
       /**
@@ -1165,20 +1180,40 @@
       wsScanAndConnect();
 
       // Periodic background rescan to discover newly started MCP servers.
-      // When connected: rescan every 120s (slow — most users have 1 server).
-      // When disconnected: keep aggressive scanning (current backoff handles this).
+      // When connected: slow rescan every 120s (only full range every 5min).
+      // When disconnected: use backoff from wsScanAndConnect (no extra timer needed).
       var RESCAN_CONNECTED_MS = 120000;
-      var RESCAN_DISCONNECTED_MS = 30000;
+      var FULL_RESCAN_CONNECTED_MS = 300000; // full port range every 5min when connected
+      var lastFullRescan = Date.now();
 
       function scheduleRescan() {
         clearTimeout(rescanTimerId);
-        var interval = activeConnections.length > 0 ? RESCAN_CONNECTED_MS : RESCAN_DISCONNECTED_MS;
+        // Only schedule periodic rescans when we have active connections.
+        // When disconnected, wsScanAndConnect's own backoff loop handles retries.
+        if (activeConnections.length === 0) {
+          // Not connected — wsScanAndConnect backoff is running, just check again later
+          rescanTimerId = setTimeout(scheduleRescan, 10000);
+          return;
+        }
         rescanTimerId = setTimeout(function() {
           if (!isScanning) {
-            wsScanAndConnect();
+            // Check if it's time for a full range scan (discover new servers)
+            var now = Date.now();
+            if (now - lastFullRescan >= FULL_RESCAN_CONNECTED_MS) {
+              lastFullRescan = now;
+              wsScanAndConnect(); // full scan including unknown ports
+            }
+            // Otherwise, only reconnect known ports that dropped
+            else {
+              for (var kp in knownActivePorts) {
+                if (knownActivePorts.hasOwnProperty(kp) && !isPortConnected(Number(kp))) {
+                  wsReconnectPort(Number(kp));
+                }
+              }
+            }
           }
           scheduleRescan();
-        }, interval);
+        }, RESCAN_CONNECTED_MS);
       }
       scheduleRescan();
     })();
