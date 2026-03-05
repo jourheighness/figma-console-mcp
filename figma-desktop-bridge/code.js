@@ -383,6 +383,21 @@ function applyNodeProperties(node, props, nodeType) {
     }
     if (props.fontSize) node.fontSize = props.fontSize;
     if (props.text) node.characters = props.text;
+    // Typography properties (fonts already pre-loaded)
+    if (props.textAlignHorizontal) node.textAlignHorizontal = props.textAlignHorizontal;
+    if (props.textAlignVertical) node.textAlignVertical = props.textAlignVertical;
+    if (props.lineHeight) {
+      if (props.lineHeight.unit === 'AUTO') {
+        node.lineHeight = { unit: 'AUTO' };
+      } else {
+        node.lineHeight = { value: props.lineHeight.value, unit: props.lineHeight.unit || 'PIXELS' };
+      }
+    }
+    if (props.letterSpacing) {
+      node.letterSpacing = { value: props.letterSpacing.value, unit: props.letterSpacing.unit || 'PIXELS' };
+    }
+    if (props.textDecoration) node.textDecoration = props.textDecoration;
+    if (props.textCase) node.textCase = props.textCase;
     // textAutoResize must be set before layoutSizingHorizontal="FILL"
     if (props.textAutoResize) {
       node.textAutoResize = props.textAutoResize;
@@ -1986,17 +2001,21 @@ figma.ui.onmessage = async (msg) => {
         throw new Error('Node must be a TEXT node. Got: ' + node.type);
       }
 
+      // Check for missing fonts — warn early with actionable message
+      if (node.hasMissingFont && !msg.fontFamily) {
+        var missingName = node.fontName !== figma.mixed ? (node.fontName.family + ' ' + node.fontName.style) : '(mixed fonts)';
+        throw new Error('Text node uses missing font "' + missingName + '". Specify fontFamily + fontStyle to override, or ask the user to install it.');
+      }
+
       // Determine target font — load it before any text mutations
       var targetFamily = msg.fontFamily || (node.fontName !== figma.mixed ? node.fontName.family : 'Inter');
       var targetStyle = msg.fontStyle || (node.fontName !== figma.mixed ? node.fontName.style : 'Regular');
       await figma.loadFontAsync({ family: targetFamily, style: targetStyle });
 
-      // Also load the current font if different (needed to set characters)
-      if (node.fontName !== figma.mixed) {
-        var currentFont = node.fontName;
-        if (currentFont.family !== targetFamily || currentFont.style !== targetStyle) {
-          await figma.loadFontAsync(currentFont);
-        }
+      // Load ALL current fonts (required before setting characters on mixed-font nodes)
+      if (node.characters.length > 0) {
+        var allFonts = node.getRangeAllFontNames(0, node.characters.length);
+        await Promise.all(allFonts.map(function(f) { return figma.loadFontAsync(f); }));
       }
 
       // Set text content if provided

@@ -1037,11 +1037,13 @@ Full tree (card with header + body):
   nodeType: "FRAME",
   properties: { name: "Card", width: 320, layoutMode: "VERTICAL", itemSpacing: 16, padding: 20 },
   children: [
-    { nodeType: "TEXT", properties: { name: "Title", text: "Hello", fontSize: 24, fontFamily: "Inter", fontStyle: "Bold" } },
+    { nodeType: "TEXT", properties: { name: "Title", text: "Hello", fontSize: 24, fontFamily: "Inter", fontStyle: "Bold", textAlignHorizontal: "CENTER" } },
     { nodeType: "FRAME", properties: { name: "Content", layoutMode: "VERTICAL", itemSpacing: 8 }, children: [
-      { nodeType: "TEXT", properties: { text: "Body text here" } }
+      { nodeType: "TEXT", properties: { text: "Body text here", lineHeight: { unit: "PERCENT", value: 150 } } }
     ]}
   ]
+
+Text styling: textAlignHorizontal, textAlignVertical, lineHeight, letterSpacing, textDecoration, textCase are all supported inline — no need for a separate figma_set_text call. Use figma_set_text only for textStyleId, variableBindings, or hyperlinks.
 
 Smart defaults (override by setting the property explicitly):
 - Auto-layout frames HUG content on both axes (primaryAxisSizingMode/counterAxisSizingMode = AUTO).
@@ -1071,6 +1073,18 @@ On partial failure (e.g. bad child type mid-tree), returns what was created befo
 					fontStyle: z.string().optional().describe("Font style (TEXT nodes, default: 'Regular')"),
 					textAutoResize: z.enum(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]).optional()
 						.describe("Text auto-resize mode (TEXT nodes). Auto-set to HEIGHT when layoutSizingHorizontal=FILL"),
+					textAlignHorizontal: z.enum(["LEFT", "CENTER", "RIGHT", "JUSTIFIED"]).optional().describe("Horizontal text alignment (TEXT nodes)"),
+					textAlignVertical: z.enum(["TOP", "CENTER", "BOTTOM"]).optional().describe("Vertical text alignment (TEXT nodes)"),
+					lineHeight: jsonObject(z.object({
+						value: z.coerce.number().optional().describe("Line height value (omit for AUTO)"),
+						unit: z.enum(["PIXELS", "PERCENT", "AUTO"]).describe("Unit type"),
+					})).optional().describe("Line height (TEXT nodes)"),
+					letterSpacing: jsonObject(z.object({
+						value: z.coerce.number().describe("Letter spacing value"),
+						unit: z.enum(["PIXELS", "PERCENT"]).optional().default("PIXELS").describe("Unit (default: PIXELS)"),
+					})).optional().describe("Letter spacing (TEXT nodes)"),
+					textDecoration: z.enum(["NONE", "UNDERLINE", "STRIKETHROUGH"]).optional().describe("Text decoration (TEXT nodes)"),
+					textCase: z.enum(["ORIGINAL", "UPPER", "LOWER", "TITLE", "SMALL_CAPS", "SMALL_CAPS_FORCED"]).optional().describe("Text case transform (TEXT nodes)"),
 					layoutMode: z.enum(["HORIZONTAL", "VERTICAL", "NONE"]).optional().describe("Auto-layout direction"),
 					itemSpacing: z.coerce.number().optional().describe("Gap between children"),
 					padding: z.coerce.number().optional().describe("Uniform padding (all sides)"),
