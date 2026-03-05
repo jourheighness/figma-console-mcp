@@ -218,6 +218,29 @@ Smart defaults apply to BOTH figma_create_nodes AND figma_set_layout (when enabl
 - For component instances, ONLY use figma_set_instance_properties for text/variant/boolean changes. Direct text/fill edits silently fail.
 - When using figma_batch with component instantiation, compact mode now includes instance IDs. Use verbose=true only if you need the full instance object.
 
+### Creating New Components / Variants — Design System Connection Pass
+When creating NEW components, variants, or custom UI that isn't purely assembling existing design system instances, you MUST do a design system connection pass after building the structure. Hardcoded values make components brittle and impossible to theme.
+
+**Before building:** Run figma_context to see available variables, styles, and components. This tells you what tokens and styles exist to connect to.
+
+**After scaffolding, connect every layer:**
+1. **Text styles** — Apply textStyleId via figma_set_text for every text node (headings, body, labels, captions). Don't just set fontSize/fontFamily manually if a text style exists.
+2. **Fill colors** — Bind fills to color variables via figma_set_appearance variableBindings (e.g. "Colors/Surface", "Colors/Primary"). Don't hardcode hex values when a variable exists.
+3. **Stroke colors** — Bind stroke fills to color variables the same way. Border colors should be tokens, not raw hex.
+4. **Effect styles** — Apply effectStyleId via figma_set_appearance for shadows/blurs if effect styles exist. For custom effects, bind shadow color to a variable.
+5. **Spacing & sizing tokens** — Bind padding, itemSpacing, cornerRadius to spacing/radius variables via figma_set_layout variableBindings if spacing tokens exist.
+6. **Text content variables** — For labels that change per mode/theme (e.g. placeholder text, button labels), bind text content to string variables.
+
+**Checklist — no layer left behind:**
+- Every text node → textStyleId or explicit variable bindings on font properties
+- Every colored fill → variable binding (not raw hex)
+- Every stroke → variable binding
+- Every shadow/blur → effectStyleId or variable-bound shadow color
+- Every spacing value → variable binding if spacing tokens exist
+- Corner radii → variable binding if radius tokens exist
+
+If the file has NO variables or styles (empty design system), use sensible hardcoded values — but note this in your response so the user knows the component isn't token-connected.
+
 ### Text Styles and Fills
 - To apply a text style while preserving a custom fill: (1) figma_set_text with textStyleId, then (2) figma_set_appearance with fills. The style sets typography; the fill override sticks on top.
 - When mixing text nodes in the same layout, ensure lineHeight values match. Mixing INTRINSIC (auto) with explicit percentages (e.g. 150%) causes baseline misalignment.
