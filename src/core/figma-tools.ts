@@ -3287,7 +3287,9 @@ Sources:
 - "plugin" (default): Uses Desktop Bridge exportAsync — shows current runtime state, reliable after changes. Requires plugin connection.
 - "api": Uses REST API image render — works without plugin but may show stale state. Supports return_url for URL-only mode.
 
-Call as standalone (not inside figma_batch) — image responses are large.`,
+Call as standalone (not inside figma_batch) — image responses are large.
+
+IMPORTANT: When reviewing screenshots, be genuinely critical. Check: reasonable dimensions (not squashed/tiny), proper spacing, text not truncated, visual hierarchy clear, looks like production UI. Do NOT say "looks good" unless it actually does.`,
 		{
 			nodeId: z
 				.string()

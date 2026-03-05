@@ -175,7 +175,13 @@ These cached resources provide instant project context — read them first to av
 - To see recent changes (yours or user's): figma_connection action='changes'.
 - Modify with figma_set_text, figma_set_appearance, figma_set_layout — not by recreating trees.
 - Only use figma_create_nodes for NEW nodes that don't exist yet.
-- After visual changes: screenshot once to verify. Max 2 fix iterations, then ask the user.
+- After visual changes: screenshot to verify. Be CRITICAL — actually evaluate the result:
+  - Does it look like a real, production UI? Or does it look broken/squashed/stretched?
+  - Check proportions: is the component a reasonable size? A 100px-wide stepper or 50px-tall card is obviously wrong.
+  - Check spacing: are elements cramped or overlapping? Is text truncated or overflowing?
+  - Check hierarchy: can you distinguish headings from body text? Are interactive elements obvious?
+  - If ANYTHING looks off, fix it. Do not say "looks good" unless it genuinely looks like something a designer would ship.
+  - Max 2 fix iterations after screenshot, then ask the user.
 
 ### Design Resources — Local vs Remote
 - FIRST: figma_context for cached component/variable/style overview.
