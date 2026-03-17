@@ -106,156 +106,237 @@ class LocalFigmaConsoleMCP {
 				version: "0.1.0",
 			},
 			{
-				instructions: `## Figma Console MCP — Tool Reference (26 tools)
+				instructions: `## Figma Console MCP — Tool Reference & Workflow Guide
 
-### MCP Resources (check BEFORE making tool calls)
-These cached resources provide instant project context — read them first to avoid unnecessary tool calls:
-- figma://context/current — overview of the currently-open file: pages, component counts, variable collections, styles. Read this at the start of every session.
-- figma://context/{fileKey} — full context for a specific file (pages, components, tokens, styles).
-- figma://context/{fileKey}/components — component inventory for the file.
+### MCP Resources (read before making tool calls)
+Cached resources provide instant project context — check first:
+- figma://context/current — file overview: pages, component counts, variable collections, styles. Read at session start.
+- figma://context/{fileKey} — full context for a specific file.
+- figma://context/{fileKey}/components — component inventory.
 - figma://context/{fileKey}/tokens — variable collections and token summary.
 - figma://context/{fileKey}/styles — style summary (paint, text, effect).
 - figma://context/library — team design system library catalog (if FIGMA_DESIGN_SYSTEMS configured).
 
 ### Session Start
-1. Read figma://context/current — get instant file overview before any tool calls.
-2. figma_connection action='navigate' — open a Figma URL or switch files. ALWAYS first tool call.
-3. figma_context — consolidated design system overview (components, variables, styles) in one call.
-4. figma_inspect — deep-inspect a node: structure, visuals, layout, text, variable bindings (resolved to names), component info, children. Omit nodeId to inspect current selection (includes otherSelected for multi-select).
-5. figma_get_viewport — see what's currently visible in the Figma canvas without requiring selection.
+1. Read figma://context/current — instant file overview.
+2. figma_connection action='navigate' — open a Figma URL or switch files. Use this as your first tool call.
+3. figma_context — consolidated design system overview (components, variables, styles) in one call. This determines your palette, typography, and building blocks.
+4. figma_inspect — deep-inspect a node. Omit nodeId to inspect current selection (includes otherSelected for multi-select).
+5. figma_get_viewport — see what's visible in the canvas without requiring selection.
 
-### Read Data
-- figma_inspect — THE primary read tool. Deep-inspect any node with aggressive data stripping. Falls back to selection if no nodeId.
-- figma_context — design system overview from cache: component inventory, variable collections, style counts.
-- figma_find_node — search current page for nodes by name/type. Use to locate nodes before inspecting.
+---
+
+### Tools: Read
+- figma_inspect — the primary read tool. Deep node inspection with data stripping. Falls back to selection.
+- figma_context — design system overview from cache: components, variables, styles.
+- figma_find_node — search current page by name/type. Use to locate nodes before inspecting.
 - figma_get_component — single component detail (metadata | reconstruction | development format).
 - figma_find_components — search/browse components: keys → summary → details. Use figma_context for overview.
 - figma_get_variables — design tokens with code export (CSS/Tailwind/Sass/TS). Use figma_context for summary.
 - figma_get_styles — styles with code export. Use figma_context for summary.
-- figma_get_library_components — search team's published library by name (needs FIGMA_DESIGN_SYSTEMS).
+- figma_get_library_components — search team's published library by name (needs FIGMA_DESIGN_SYSTEMS). Use targeted namePattern — empty string returns all components (potentially 500+).
 
-### Write: Node Structure
-- figma_edit_node — action: resize | move | clone | delete | rename | reparent | reorder | detach | focus.
-- figma_create_nodes — create a node or entire node tree inside a parent. Supports COMPONENT type for reusable definitions.
+### Tools: Write — Structure
+- figma_edit_node — action: resize | move | clone | delete | rename | reparent | reorder | detach | focus. Resize supports SECTION nodes.
+- figma_create_nodes — create a node or node tree inside a parent. Types: RECTANGLE, ELLIPSE, FRAME, COMPONENT, TEXT, LINE. COMPONENT = reusable/publishable. Not yet supported: SECTION, POLYGON, STAR, CONNECTOR, VECTOR.
 - figma_manage_page — action: create | delete | rename | switch | reorder | list.
 
-### Write: Visual Properties
-- figma_set_appearance — fills, strokes, opacity, cornerRadius, effects, rotation, blendMode.
-- figma_set_text — content + full typography (font, size, alignment, spacing, decoration, case) + variable bindings + hyperlinks on character ranges (type "URL" for web links, "NODE" for deep-links to other Figma nodes).
-- figma_set_layout — auto-layout (flexbox) or CSS grid on frames. Padding, gap, alignment, wrap.
+### Tools: Write — Visuals
+- figma_set_appearance — fills, strokes, opacity, cornerRadius, effects, rotation, blendMode, fillStyleId, strokeStyleId, effectStyleId, variableBindings. Color format: hex '#FF0000' or '#FF000080' (with alpha).
+- figma_set_text — content + typography (font, size, alignment, spacing, decoration, case) + textStyleId + variableBindings + hyperlinks (type "URL" for web links, "NODE" for Figma deep-links).
+- figma_set_layout — auto-layout (flexbox) or CSS grid. Padding, gap, alignment, wrap, variableBindings for spacing tokens.
 
-### Write: Components & Instances
-- figma_instantiate_component — create instance. ALWAYS pass both componentKey AND nodeId together.
-- figma_set_instance_properties — update props on instance. NOT direct text editing (fails silently).
-- figma_component_property — action: add | edit | delete | set_description. Manage component props and descriptions.
-- figma_component_property — action: add | edit | delete | wire | set_description. Manage component props and descriptions. For TEXT properties, use targetNodeId with add to auto-wire, or use wire action to connect existing properties to layers.
-- figma_arrange_component_set — organize variant grid with Figma's native layout.
+### Tools: Write — Components
+- figma_instantiate_component — create instance. Pass both componentKey and nodeId together. Overrides param handles TEXT and BOOLEAN only — not INSTANCE_SWAP.
+- figma_set_instance_properties — update instance props: TEXT, BOOLEAN, VARIANT, INSTANCE_SWAP. The only way to change instance content — direct text/fill edits on instances silently fail.
+- figma_component_property — action: add | edit | delete | wire | set_description. For TEXT properties, pass targetNodeId with add to auto-wire. Use wire action to connect properties to layers ('characters' for text, 'visible' for boolean, 'mainComponent' for instance swap).
+- figma_arrange_component_set — organize variant grid with Figma's native purple-dashed layout.
+- figma_combine_as_variants — combine components into a variant set. Strokes on child components are preserved through the combine operation.
 
-### Write: Variables & Tokens
+### Tools: Write — Variables & Tokens
 - figma_variable_operation — single mutation. action: update_value | create | create_collection | delete | rename | add_mode | rename_mode.
-- figma_batch_variables — bulk ops, 10-50x faster. action: create (add to collection) | update (change values) | setup (create collection + modes + all variables atomically).
+- figma_batch_variables — bulk ops, 10-50x faster. action: create | update | setup (collection + modes + variables atomically).
 
-### Write: Styles & Prototyping
+### Tools: Write — Styles & Prototyping
 - figma_create_style — action: create | update | delete | list. Paint, text, effect styles.
 - figma_set_reaction — action: add | remove | list. Prototyping triggers, actions, transitions.
 
-### Observe & Debug
-- figma_screenshot — capture live state (source='plugin') or REST render (source='api'). Returns base64, call standalone — never inside figma_batch.
+### Tools: Observe & Debug
+- figma_screenshot — capture live state (source='plugin') or REST render (source='api'). Returns base64. Call standalone, not inside figma_batch (payload too large). Large nodes auto-downscaled to prevent export failures.
 - figma_console — action: get (past logs) | watch (real-time stream) | clear.
-### Connection & Environment
+
+### Tools: Connection
 - figma_connection — action: navigate | status | reconnect | invalidate_cache | reload | list_files | changes.
 
-### Multi-Tool
-- figma_batch — run up to 25 tools in one request. Best for reads and simple writes (edit, appearance, text on individual nodes). Do NOT batch complex nested figma_create_nodes, component instantiation with layout, or multi-step component assembly — do those one at a time. Do NOT include figma_screenshot (payload too large).
+### Tools: Multi-Tool
+- figma_batch — up to 25 tools in one request. Best for reads and simple writes (edit, appearance, text on individual nodes). Avoid batching: complex nested figma_create_nodes, component instantiation with layout, multi-step component assembly, or figma_screenshot.
 
-### Modifying Designs
-- NEVER delete and rebuild when a modification was requested. Inspect existing nodes → use set_* tools.
-- Before ANY edit: figma_inspect (omit nodeId to inspect selection), or figma_find_node to locate nodes by name/type.
-- To find existing nodes: use figma_find_node first. For detailed properties of a known node, use figma_inspect.
+---
+
+### Building Workflow
+
+**Phase 1: Discover** (before touching anything)
+1. Read figma://context/current.
+2. figma_context — get variables, styles, components. These are your colors, typography, spacing. Don't copy hex values from existing nodes when design tokens exist.
+3. If the user references a design or wireframe, translate its structure into the design system's visual language — don't replicate its exact colors/fonts.
+
+**Phase 2: Test** (validate before scaling)
+- When using a tool capability for the first time in a session, test on one node. Inspect the result. Then apply to all nodes.
+- This catches silent failures early (e.g. style not applying, variable not binding).
+
+**Phase 3: Build + Connect** (scaffold and bind tokens together)
+- Create node trees with figma_create_nodes. Use auto-layout from the start.
+- After creating nodes, apply text styles (textStyleId) and variable bindings (fills, strokes, spacing) in the same batch or the next call. Don't move on to creating more nodes while existing nodes have raw hex values.
+- Pattern: create 1-3 nodes → apply styles/variables → create next batch → apply styles/variables. Not: create all nodes → try to remember which ones need tokens.
+- A node is done when it has: textStyleId (if text), fill variable binding (if colored), stroke variable binding (if stroked), spacing variable bindings (if in auto-layout with token-based spacing).
+- Batch independent operations with figma_batch.
+
+**Phase 4: Verify**
+- Screenshot at milestones only: (a) first component validates the pattern, (b) all components done (overview), (c) something looks wrong.
+- Use figma_inspect for structural checks (much cheaper than screenshots).
+- Max 2 fix iterations after screenshot, then ask the user.
+- Run the Screenshot Self-Review Protocol on every screenshot (see figma_screenshot tool description). All 7 checks should pass before declaring "looks good."
+- Common visual failures to watch for: text overflow/truncation, misaligned baselines, inconsistent spacing, cards too small (<200px), icons disproportionate to containers, placeholder content left in, stray 1px gaps between elements.
+
+### Modifying Existing Designs
+- Don't delete and rebuild when a modification was requested. Inspect existing → use set_* tools.
+- Before editing: figma_inspect (omit nodeId = inspect selection), or figma_find_node to locate by name/type.
 - To see recent changes (yours or user's): figma_connection action='changes'.
-- Modify with figma_set_text, figma_set_appearance, figma_set_layout — not by recreating trees.
-- Only use figma_create_nodes for NEW nodes that don't exist yet.
-- After visual changes: screenshot to verify. Be CRITICAL — actually evaluate the result:
-  - Does it look like a real, production UI? Or does it look broken/squashed/stretched?
-  - Check proportions: is the component a reasonable size? A 100px-wide stepper or 50px-tall card is obviously wrong.
-  - Check spacing: are elements cramped or overlapping? Is text truncated or overflowing?
-  - Check hierarchy: can you distinguish headings from body text? Are interactive elements obvious?
-  - If ANYTHING looks off, fix it. Do not say "looks good" unless it genuinely looks like something a designer would ship.
-  - Max 2 fix iterations after screenshot, then ask the user.
+- Only use figma_create_nodes for genuinely new nodes.
 
-### Design Resources — Local vs Remote
-- FIRST: figma_context for cached component/variable/style overview.
-- Code export: figma_get_variables format='css'/'tailwind' — for token code generation.
-- Code export: figma_get_styles with export formats — for style code generation.
-- Component keys: figma_find_components verbosity='keys' query='Name' — cached keys for instantiation.
-- Remote/library: figma_get_library_components namePattern='Name' — team library cache (60min TTL).
-- Style keys from the library work DIRECTLY as fillStyleId/textStyleId/effectStyleId — the plugin resolves keys internally.
-- DO NOT inspect random nodes to discover colors/fonts/tokens. The caches above have everything indexed.
+---
 
-### Figma Layout Rules — Smart Defaults
-Smart defaults apply to BOTH figma_create_nodes AND figma_set_layout (when enabling auto-layout):
-- Auto-layout frames HUG content on both axes (primaryAxisSizingMode/counterAxisSizingMode = AUTO).
-- strokesIncludedInLayout defaults to true (CSS border-box behavior).
-- Text nodes auto-size to content (WIDTH_AND_HEIGHT) unless width is set.
+### Style & Token System
+
+**Two independent binding systems exist on every node:**
+1. **Style bindings** (fillStyleId / textStyleId / effectStyleId / strokeStyleId): Reusable presets bundling multiple properties. A textStyleId sets font+size+weight+lineHeight together. Apply via figma_set_text textStyleId or figma_set_appearance fillStyleId/strokeStyleId/effectStyleId.
+2. **Variable bindings** (variableBindings param): Individual design tokens bound to single properties (e.g. fills[0] → "Colors/Primary"). Apply via variableBindings on set_appearance/set_text/set_layout.
+3. A node can have both — e.g. textStyleId for typography + a variable binding on its fill color.
+
+**Style ID formats:**
+- Local styles (created via figma_create_style): Use the returned style ID directly. Works immediately.
+- Library/remote styles: Pass the style key (bare hash like "abc123..." or S: format like "S:abc123,1:2"). The plugin calls importStyleByKeyAsync internally to resolve the key to a local ID before applying. The style must be published to the team library.
+- If a library style fails to apply: (a) verify the key via figma_get_styles or figma_context, (b) ensure the style is published, (c) try the bare hash format without S: prefix.
+
+**Discovering resources:**
+- figma_context — cached component/variable/style overview. Check first.
+- figma_get_variables format='css'/'tailwind' — token code generation.
+- figma_find_components verbosity='keys' query='Name' — cached keys for instantiation.
+- figma_get_library_components namePattern='Name' — team library (60min TTL).
+- Don't inspect random nodes to discover colors/fonts/tokens. The caches above have everything indexed.
+
+**Text style + custom fill:** (1) figma_set_text with textStyleId, then (2) figma_set_appearance with fills. Style sets typography; fill override sticks.
+
+### Layout Rules — Smart Defaults
+Smart defaults apply to both figma_create_nodes and figma_set_layout:
+- Auto-layout frames: HUG content both axes (primaryAxisSizingMode/counterAxisSizingMode = AUTO).
+- strokesIncludedInLayout: true (CSS border-box behavior).
+- Text nodes: auto-size (WIDTH_AND_HEIGHT) unless width set.
 - Text inside auto-layout: FILL horizontal + HUG vertical (wraps to parent width).
-- Child auto-layout frames inside auto-layout: HUG both axes (don't squish nested layouts).
-- Shadow effects default to: color=#00000040, offset={0,0}, radius=0 (sharp) — only spread needed for focus rings.
+- Child auto-layout frames inside auto-layout: HUG both axes.
+- Shadow defaults: color=#00000040, offset={0,0}, radius=0 — only spread needed for focus rings.
 - All defaults overridable by setting the property explicitly.
-- You usually don't need to set width/height on auto-layout frames — they size to content.
-- GRID: children all stack at cell (0,0) by default. You MUST set gridColumnAnchorIndex + gridRowAnchorIndex on EACH child via figma_set_layout.
-- Creating a frame does NOT make it auto-layout. Set layoutMode explicitly.
-- Coordinates (x, y) are parent-relative. Section parents offset from page origin.
-- Frames and components are created with clipsContent=true by default (matches Figma UI behavior). Pass clipsContent=false in properties to override.
+- Grid: children stack at cell (0,0) by default. Set gridColumnAnchorIndex + gridRowAnchorIndex on each child to position them.
+- Creating a frame does not make it auto-layout. Set layoutMode explicitly.
+- Frames/components default to clipsContent=true (matches Figma UI).
+- Setting layoutMode resets sizing to HUG (AUTO). Re-set sizing after enabling auto-layout if you need FIXED sizing.
+- Coordinates (x, y) are parent-relative. Children of SECTION nodes use section-relative coordinates — add section origin offset when calculating from page-absolute positions.
+
+**Sizing properties — prefer the shorthand:**
+- layoutSizingHorizontal / layoutSizingVertical: FIXED | HUG | FILL — maps directly to Figma UI dropdown. Use these.
+- primaryAxisSizingMode / counterAxisSizingMode: FIXED | AUTO — low-level equivalents. AUTO = HUG. Still supported but less intuitive.
+- layoutSizingHorizontal='FILL' on text nodes requires textAutoResize='HEIGHT' (auto-set by smart defaults).
+- HUG = size determined by children. FILL = stretch to parent. FIXED = explicit width/height.
 
 ### Effects (Shadows, Blurs, Focus Rings)
-- CRITICAL: Drop shadow effects on a frame require clipsContent=true to render. Without it, the frame has no hard visual boundary and effects silently fail to appear. This is why frames/components default to clipsContent=true.
-- Focus ring pattern: TWO layered DROP_SHADOW effects on the frame itself — (1) white shadow with spread=2 (inner gap), (2) blue shadow with spread=4 (outer ring). Order matters: white on top, blue underneath. Both render outside the frame bounds, taking its shape.
-- This replaces stroke-based focus rings because strokes lack an "outside" position option. The shadow approach works on any shape and extends beyond component bounds.
-- Effects with spread do NOT affect layout sizing — they are purely visual and extend beyond the node's bounding box.
+- Drop shadow on a frame requires clipsContent=true to render. Without it, effects silently don't appear.
+- Focus ring pattern: two DROP_SHADOW effects — (1) white, spread=2 (gap) on top, (2) blue, spread=4 (ring) underneath. Extends beyond frame bounds.
+- Effects with spread don't affect layout sizing — purely visual.
 
-### Component Instances
-- INSTANCE_SWAP overrides: figma_instantiate_component's overrides param ONLY handles TEXT and BOOLEAN properties. For INSTANCE_SWAP, you MUST call figma_set_instance_properties as a separate step after instantiation.
-- For component instances, ONLY use figma_set_instance_properties for text/variant/boolean changes. Direct text/fill edits silently fail.
-- When using figma_batch with component instantiation, compact mode now includes instance IDs. Use verbose=true only if you need the full instance object.
+### Component Instances & Variants
+- INSTANCE_SWAP requires a separate figma_set_instance_properties call after instantiation (not supported in overrides param). The value can be a local node ID or a component key (40-char hex hash or S: format) — library components are auto-imported via importComponentByKeyAsync.
+- For instances: use figma_set_instance_properties for content changes. Direct text/fill edits silently fail.
+- figma_combine_as_variants preserves strokes on child components (snapshots and re-applies them after the combine operation).
+- Keep variant dimensions similar within a component set. Wildly different sizes (wide+short vs narrow+tall) create ugly bounding boxes.
+- Detached instances (figma_edit_node action='detach') don't inherit future main component changes. Creates new node IDs.
+- When using figma_batch with component instantiation, compact mode includes instance IDs. Use verbose=true only for full objects.
 
-### Creating New Components / Variants — Design System Connection Pass
-When creating NEW components, variants, or custom UI that isn't purely assembling existing design system instances, you MUST do a design system connection pass after building the structure. Hardcoded values make components brittle and impossible to theme.
+### Design System Connection Pass
+When creating new components/variants/custom UI, connect every layer to the design system as you build. Hardcoded values are brittle.
 
-**Before building:** Run figma_context to see available variables, styles, and components. This tells you what tokens and styles exist to connect to.
+**The design system is a closed system.** Treat it as a constraint, not a suggestion:
+- Every color, spacing, and typography value should come from figma_context / figma_get_variables. Don't invent token names or guess values.
+- If a needed token doesn't exist (e.g. no "focus-ring-blue" variable), tell the user — don't silently hardcode a guess.
+- After every 5+ creation calls, re-check figma_context to confirm you're still using correct token names/IDs (values can drift during a session).
+- When translating a wireframe/mockup into a design system: extract the structure (layout, hierarchy, content) but derive all visual properties (colors, fonts, spacing, radii) from the DS tokens. The source design's visual style is irrelevant.
+
+**Before building:** Run figma_context for available variables, styles, components.
 
 **After scaffolding, connect every layer:**
-1. **Text styles** — Apply textStyleId via figma_set_text for every text node (headings, body, labels, captions). Don't just set fontSize/fontFamily manually if a text style exists.
-2. **Fill colors** — Bind fills to color variables via figma_set_appearance variableBindings (e.g. "Colors/Surface", "Colors/Primary"). Don't hardcode hex values when a variable exists.
-3. **Stroke colors** — Bind stroke fills to color variables the same way. Border colors should be tokens, not raw hex.
-4. **Effect styles** — Apply effectStyleId via figma_set_appearance for shadows/blurs if effect styles exist. For custom effects, bind shadow color to a variable.
-5. **Spacing & sizing tokens** — Bind padding, itemSpacing, cornerRadius to spacing/radius variables via figma_set_layout variableBindings if spacing tokens exist.
-6. **Text content variables** — For labels that change per mode/theme (e.g. placeholder text, button labels), bind text content to string variables.
+1. **Text styles** — textStyleId via figma_set_text for every text node.
+2. **Fill colors** — variableBindings via figma_set_appearance (e.g. "Colors/Surface").
+3. **Stroke colors** — variableBindings via figma_set_appearance. A default paint is auto-created if the node has no strokes yet.
+4. **Effect styles** — effectStyleId or bind shadow color to a variable.
+5. **Spacing tokens** — variableBindings via figma_set_layout for padding, itemSpacing, cornerRadius.
+6. **Text content** — string variables for labels that change per mode/theme.
 
-**Checklist — no layer left behind:**
-- Every text node → textStyleId or explicit variable bindings on font properties
+**No layer left behind:**
+- Every text node → textStyleId or variable bindings on font properties
 - Every colored fill → variable binding (not raw hex)
 - Every stroke → variable binding
-- Every shadow/blur → effectStyleId or variable-bound shadow color
-- Every spacing value → variable binding if spacing tokens exist
-- Corner radii → variable binding if radius tokens exist
+- Every shadow/blur → effectStyleId or variable-bound color
+- Every spacing value → variable binding if tokens exist
+- Corner radii → variable binding if tokens exist
 
-If the file has NO variables or styles (empty design system), use sensible hardcoded values — but note this in your response so the user knows the component isn't token-connected.
+No variables/styles in the file? Use sensible hardcoded values — but tell the user the component isn't token-connected.
 
-### Text Styles and Fills
-- To apply a text style while preserving a custom fill: (1) figma_set_text with textStyleId, then (2) figma_set_appearance with fills. The style sets typography; the fill override sticks on top.
-- When mixing text nodes in the same layout, ensure lineHeight values match. Mixing INTRINSIC (auto) with explicit percentages (e.g. 150%) causes baseline misalignment.
-- figma_inspect returns TWO different binding types — don't confuse them:
-  - Style bindings (fillStyleId/textStyleId/effectStyleId): reusable PRESETS that bundle multiple properties (e.g. textStyleId = font+size+weight+lineHeight). Apply via figma_set_text textStyleId or figma_set_appearance fillStyleId.
-  - Variable bindings (vars/varIds): individual design TOKENS bound to single properties (e.g. fills → "Colors/Primary"). Apply via variableBindings param on set_appearance/set_text/set_layout.
-  - A node can have BOTH — e.g. textStyleId for typography + a variable binding on its fill color.
+---
+
+### Known Behaviors & Gotchas
+
+**Paint auto-creation on bind:** When binding a variable to a paint slot that doesn't exist (e.g. stroke on a node with no strokes), a default solid black paint is auto-created at the target index. The variable binding then overrides its color. No need to add strokes/fills manually before binding.
+
+**Font naming varies by family:** Inter uses "Semi Bold" (space), Open Sans uses "SemiBold" (no space). Must match the exact installed style name or text creation fails silently. When unsure, inspect an existing text node in that font.
+
+**lineHeight consistency:** Mixing INTRINSIC (auto) with explicit percentages (e.g. 150%) in sibling text nodes causes baseline misalignment. Keep the format consistent.
+
+**Node IDs are ephemeral:** Change across sessions, can change during operations (detach creates new IDs). Re-fetch at session start. After batch operations, verify nodes still exist before referencing them — nodes can vanish between operations. If an ID fails, re-find by name with figma_find_node.
+
+**Sections:** Auto-expand to contain children but don't auto-shrink. After deleting content, sections retain their maximum-ever size. Use figma_edit_node action='resize' to manually shrink them.
+
+**strokeCap:** Single property applying to both ends. No separate start/end control on LINE nodes. Per-vertex caps possible on VectorNodes via the vector network API only.
+
+### Efficiency Rules
+
+**Batch aggressively:** Use figma_batch for independent operations. 7 label creations at 3 calls each = 21 calls. Batched = 3 calls. Batch reads together and writes together.
+
+**Screenshot sparingly:** Each screenshot carries a large base64 payload. Use figma_inspect for structural validation. Screenshot only at: (a) first component validates pattern, (b) all components done, (c) something looks wrong. Don't screenshot tiny elements (48x48 icons) — inspect them.
+
+**Inspect efficiently:** One depth-2 figma_inspect + one overview screenshot to start. Don't do 25 individual inspections — batch with figma_batch or use figma_find_node for bulk discovery.
+
+**Fail fast, pivot early:** If the same operation fails twice with different approaches, declare the limitation and ask the user. Don't burn 15+ tool calls chasing a broken path.
+
+**Library fetches:** Use targeted namePattern. Empty pattern returns all components (potentially hundreds).
+
+### UX/UI Quality Principles
+When building UI in Figma, apply these principles — they're what separates "technically correct" from "looks shippable":
+- **Visual hierarchy**: Size and weight signal importance. Headings > subheadings > body > captions. If everything is the same size, nothing is important.
+- **Proximity groups**: Elements that belong together should be closer together than elements that don't. Card content has tight internal spacing; cards have wider spacing between them.
+- **Consistent rhythm**: Pick a spacing scale (4px/8px base) and stick to it. Spacing should feel intentional, not random. Derive from design tokens when available.
+- **Proportional sizing**: Components should be sized proportionally to their content and context. A button label of 3 words doesn't need a 400px-wide button. A card showing 4 lines of text shouldn't be 50px tall.
+- **Alignment creates order**: Left-align text stacks. Center-align standalone labels. Don't mix alignment within a group unless there's a clear reason.
+- **Minimum readable sizes**: Body text ≥12px, labels ≥11px, touch targets ≥44px, icons 16-24px for UI, 12-16px inline with text.
+- **Contrast**: Text must be readable against its background. Dark text on light, or light text on dark. Avoid light-gray-on-white.
 
 ### Rules
-- NodeIds are session-specific — NEVER reuse from a previous conversation. Always re-fetch.
-- Use figma_find_node for node discovery, figma_inspect for node details. Avoid tree dumps.
-- Place components inside a Section or Frame, never on bare canvas.
-- Test tool capabilities on ONE node first before applying to many.
-- figma_get_variables works via Desktop Bridge on all plans. REST API fallback available for Enterprise users.
-- Always verify file name before destructive operations when multiple files are connected.`,
+- Don't leave nodes with hardcoded hex colors or missing textStyleId when design tokens/styles exist. If figma_context returned variables and styles, use them on every node. This is the most common quality failure.
+- Node IDs are session-specific — don't reuse from a previous conversation.
+- Use figma_find_node for discovery, figma_inspect for details. Avoid tree dumps.
+- Place components inside a Section or Frame, not on bare canvas.
+- Test tool capabilities on one node first before applying to many.
+- figma_get_variables works via Desktop Bridge on all plans. REST API fallback for Enterprise.
+- Verify file name before destructive operations when multiple files are connected.
+- Keep stateful Figma tool operations in the main context — sub-agents lack session context and node IDs.`,
 			},
 		);
 	}

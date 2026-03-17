@@ -852,7 +852,7 @@ export function registerFigmaAPITools(
 		"figma_get_file_data",
 		`DEPRECATED for single-node reads — use figma_inspect instead (returns more data with variable resolution in one call). Use figma_context for design system overviews. Use figma_find_node to locate nodes by name/type.
 
-Only use this tool when you specifically need: (1) raw REST API tree structure with pagination, (2) scope='plugin' for plugin development, or (3) full tree dumps beyond figma_inspect's depth=3 limit. WARNING: Can consume large tokens. Start with verbosity='summary' and depth=1. Batch-compatible.`,
+Only use this tool when you specifically need: (1) raw REST API tree structure with pagination, (2) scope='plugin' for plugin development, or (3) full tree dumps beyond figma_inspect's depth=3 limit. Can consume large tokens — start with verbosity='summary' and depth=1. Batch-compatible.`,
 		{
 			fileUrl: z
 				.string()
@@ -3281,7 +3281,7 @@ Only use this tool when you specifically need: (1) raw REST API tree structure w
 	// Tool: Screenshot (unified — plugin or REST API)
 	server.tool(
 		"figma_screenshot",
-		`Capture a screenshot of a Figma node. Returns a base64 image for visual analysis.
+		`Capture a screenshot of a Figma node. Returns a base64 image for visual analysis. Large nodes are auto-downscaled to prevent export failures (max ~4096px per dimension).
 
 Sources:
 - "plugin" (default): Uses Desktop Bridge exportAsync — shows current runtime state, reliable after changes. Requires plugin connection.
@@ -3289,7 +3289,16 @@ Sources:
 
 Call as standalone (not inside figma_batch) — image responses are large.
 
-IMPORTANT: When reviewing screenshots, be genuinely critical. Check: reasonable dimensions (not squashed/tiny), proper spacing, text not truncated, visual hierarchy clear, looks like production UI. Do NOT say "looks good" unless it actually does.`,
+Screenshot self-review checklist — run through these when evaluating a screenshot:
+1. Hierarchy: Is there a clear primary → secondary → tertiary reading order? Headings larger than body, labels subordinate to content.
+2. Proportions: Are elements sized for their role? Cards ≥200px wide, icons 16-24px, touch targets ≥44px. A 50px-tall card or 100px-wide stepper is wrong.
+3. Spacing: Is rhythm consistent? Equal gaps between siblings, padding proportional to container size. Look for cramped or floating elements.
+4. Alignment: Are edges, baselines, and centers aligned? Check left edges of stacked text, centering in containers, grid alignment.
+5. Readability: Body text ≥12px, sufficient contrast, no truncation, no overflow. Labels fully visible.
+6. Completeness: Any placeholder text ("Lorem"), missing icons (empty squares), broken images, or half-built states?
+7. Polish: Consistent corner radii, consistent stroke weights, no stray 1px gaps, fills reach edges.
+
+If a check fails, fix it before moving on. Name specific failures rather than saying "looks good."`,
 		{
 			nodeId: z
 				.string()
@@ -3455,7 +3464,7 @@ IMPORTANT: When reviewing screenshots, be genuinely critical. Check: reasonable 
 	// This is the correct way to update TEXT/BOOLEAN/VARIANT properties on component instances
 	server.tool(
 		"figma_set_instance_properties",
-		"Update component properties on a component instance. IMPORTANT: Use this tool instead of trying to edit text nodes directly when working with component instances. Components often expose TEXT, BOOLEAN, INSTANCE_SWAP, and VARIANT properties that control their content. Direct text node editing may fail silently if the component uses properties. This tool handles the #nodeId suffix pattern automatically. Requires Desktop Bridge connection.",
+		"Update component properties on a component instance. Use this tool instead of editing text nodes directly — components expose TEXT, BOOLEAN, INSTANCE_SWAP, and VARIANT properties that control their content, and direct text node editing may fail silently. The tool handles the #nodeId suffix pattern automatically. For INSTANCE_SWAP properties: the value can be a local node ID or a component key (40-char hex hash or S: format) — library components are auto-imported via importComponentByKeyAsync. Requires Desktop Bridge connection.",
 		{
 			nodeId: z
 				.string()
@@ -3466,7 +3475,8 @@ IMPORTANT: When reviewing screenshots, be genuinely critical. Check: reasonable 
 				.describe(
 					"Properties to set. Keys are property names (e.g., 'Label', 'Show Icon', 'Size'). " +
 					"Values are strings for TEXT/VARIANT properties, booleans for BOOLEAN properties. " +
-					"The tool automatically handles the #nodeId suffix for TEXT/BOOLEAN/INSTANCE_SWAP properties."
+					"The tool automatically handles the #nodeId suffix for TEXT/BOOLEAN/INSTANCE_SWAP properties. " +
+					"For INSTANCE_SWAP: pass a local node ID or a component key (40-char hex or S: format) — library components are auto-imported."
 				),
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },

@@ -107,7 +107,7 @@ export function registerNodeTools(deps: LocalToolDeps): void {
 For reading node properties, use figma_inspect instead.
 
 Actions and required params:
-- resize: width, height (optional: withConstraints)
+- resize: width, height (optional: withConstraints). Supports SECTION nodes (always uses resizeWithoutConstraints). Sections only expand automatically — use resize to shrink them.
 - move: x, y
 - clone: (no extra params — returns cloned node info)
 - delete: (no extra params — destructive, undoable via Figma)
@@ -232,9 +232,9 @@ Actions and required params:
 
 Color format: hex strings like '#FF0000' or '#FF000080' (with alpha). Gradient fills use type 'GRADIENT_LINEAR'/'GRADIENT_RADIAL' with gradientStops array. gradientTransform defaults to left-to-right if omitted.
 
-Variable bindings: use variableBindings to bind variables to node properties, paint colors (fills/strokes with paintIndex), or effect properties (effectColor, effectRadius, effectSpread, effectOffsetX, effectOffsetY with effectIndex). Warning: icon instances often have empty fills — use field "strokes" instead of "fills" for variable binding on icons.
+Variable bindings: use variableBindings to bind variables to node properties, paint colors (fills/strokes with paintIndex), or effect properties (effectColor, effectRadius, effectSpread, effectOffsetX, effectOffsetY with effectIndex). If the target paint slot doesn't exist (e.g. no stroke on the node), a default solid black paint is auto-created before binding. Icon instances often have empty fills — use field "strokes" instead of "fills" for variable binding on icons.
 
-IMPORTANT: Drop shadow effects on frames require clipsContent=true on that frame to render — without it, the frame has no visual boundary and effects silently don't appear. Focus ring pattern: two DROP_SHADOW effects on the frame — white (spread=2, gap) on top + blue (spread=4, ring) underneath. This extends beyond the frame bounds, taking its shape.`,
+Drop shadow effects on frames require clipsContent=true to render — without it, the frame has no visual boundary and effects silently don't appear. Focus ring pattern: two DROP_SHADOW effects on the frame — white (spread=2, gap) on top + blue (spread=4, ring) underneath. This extends beyond the frame bounds, taking its shape.`,
 		{
 			nodeId: z.string().describe("The node ID to modify"),
 			fills: jsonArray(z.array(
@@ -301,9 +301,9 @@ IMPORTANT: Drop shadow effects on frames require clipsContent=true on that frame
 				"COLOR_DODGE", "OVERLAY", "SOFT_LIGHT", "HARD_LIGHT", "DIFFERENCE",
 				"EXCLUSION", "HUE", "SATURATION", "COLOR", "LUMINOSITY",
 			]).optional().describe("Blend mode"),
-			fillStyleId: z.string().optional().describe("Paint style ID to apply as fill (from figma_create_style list). Empty string to detach."),
-			strokeStyleId: z.string().optional().describe("Paint style ID to apply as stroke. Empty string to detach."),
-			effectStyleId: z.string().optional().describe("Effect style ID to apply. Empty string to detach."),
+			fillStyleId: z.string().optional().describe("Paint style ID or library key to apply as fill. Accepts local IDs, library keys (40-char hex), or S: format. Library keys auto-imported. Empty string to detach."),
+			strokeStyleId: z.string().optional().describe("Paint style ID or library key to apply as stroke. Same key formats as fillStyleId. Empty string to detach."),
+			effectStyleId: z.string().optional().describe("Effect style ID or library key to apply. Same key formats as fillStyleId. Empty string to detach."),
 			variableBindings: jsonArray(z.array(z.object({
 				field: z.enum([
 					"fills", "strokes", "opacity", "cornerRadius",
@@ -423,18 +423,30 @@ IMPORTANT: Drop shadow effects on frames require clipsContent=true on that frame
 					needsCodeExec = true;
 				}
 
+				// Style key resolution: detect library keys (S:hash,localId or bare 40-char hex) and import via importStyleByKeyAsync
+				if (fillStyleId !== undefined || strokeStyleId !== undefined || effectStyleId !== undefined) {
+					codeLines.push(`async function _resolveStyleKey(rawId) {
+						if (!rawId || rawId === '') return rawId;
+						var key = null;
+						if (rawId.startsWith('S:')) key = rawId.split(',')[0].substring(2);
+						else if (/^[a-f0-9]{40}$/i.test(rawId)) key = rawId;
+						if (key) { try { return (await figma.importStyleByKeyAsync(key)).id; } catch(e) { return rawId; } }
+						return rawId;
+					}`);
+					needsCodeExec = true;
+				}
 				if (fillStyleId !== undefined) {
-					codeLines.push(`await node.setFillStyleIdAsync(${JSON.stringify(fillStyleId)});`);
+					codeLines.push(`await node.setFillStyleIdAsync(await _resolveStyleKey(${JSON.stringify(fillStyleId)}));`);
 					applied.push("fillStyleId");
 					needsCodeExec = true;
 				}
 				if (strokeStyleId !== undefined) {
-					codeLines.push(`await node.setStrokeStyleIdAsync(${JSON.stringify(strokeStyleId)});`);
+					codeLines.push(`await node.setStrokeStyleIdAsync(await _resolveStyleKey(${JSON.stringify(strokeStyleId)}));`);
 					applied.push("strokeStyleId");
 					needsCodeExec = true;
 				}
 				if (effectStyleId !== undefined) {
-					codeLines.push(`await node.setEffectStyleIdAsync(${JSON.stringify(effectStyleId)});`);
+					codeLines.push(`await node.setEffectStyleIdAsync(await _resolveStyleKey(${JSON.stringify(effectStyleId)}));`);
 					applied.push("effectStyleId");
 					needsCodeExec = true;
 				}
@@ -453,7 +465,12 @@ IMPORTANT: Drop shadow effects on frames require clipsContent=true on that frame
 						if (paintFields.includes(binding.field)) {
 							const idx = binding.paintIndex ?? 0;
 							const field = binding.field;
-							codeLines.push(`if (!node.${field} || !node.${field}[${idx}]) throw new Error('No ${field === "fills" ? "fill" : "stroke"} at index ${idx} on node ' + node.id + '. Icon instances typically use strokes instead of fills — try field: "strokes".');`);
+							// Auto-create a default paint if the slot doesn't exist (e.g. binding a variable to a stroke that hasn't been set yet)
+							codeLines.push(`if (!node.${field} || !node.${field}[${idx}]) {`);
+							codeLines.push(`  var _newPaints = node.${field} ? [...node.${field}] : [];`);
+							codeLines.push(`  while (_newPaints.length <= ${idx}) _newPaints.push({type: 'SOLID', color: {r: 0, g: 0, b: 0}, opacity: 1});`);
+							codeLines.push(`  node.${field} = _newPaints;`);
+							codeLines.push(`}`);
 							if (binding.variableId === "") {
 								// Unbind at paint level — fills/strokes require setBoundVariableForPaint, not node.setBoundVariable
 								codeLines.push(`var _paints = [...node.${field}];`);
@@ -946,7 +963,7 @@ Hyperlinks: apply clickable links to character ranges. Indices are 0-based, refe
 			textAutoResize: z.enum(["NONE", "WIDTH_AND_HEIGHT", "HEIGHT", "TRUNCATE"]).optional().describe("How the text node resizes to fit content"),
 			textDecoration: z.enum(["NONE", "UNDERLINE", "STRIKETHROUGH"]).optional().describe("Text decoration"),
 			textCase: z.enum(["ORIGINAL", "UPPER", "LOWER", "TITLE", "SMALL_CAPS", "SMALL_CAPS_FORCED"]).optional().describe("Text case transformation"),
-			textStyleId: z.string().optional().describe("Text style ID to apply (from figma_create_style list). Empty string to detach."),
+			textStyleId: z.string().optional().describe("Text style ID or library key to apply. Accepts local IDs (from figma_create_style), library keys (40-char hex hash), or S: format keys (e.g. 'S:abc123,1:2'). Library keys are auto-imported via importStyleByKeyAsync. Empty string to detach."),
 			variableBindings: jsonArray(z.array(z.object({
 				field: z.enum([
 					"fontSize", "fontFamily", "fontStyle",
@@ -1169,7 +1186,7 @@ On partial failure (e.g. bad child type mid-tree), returns what was created befo
 - layoutSizingHorizontal/Vertical (FIXED, HUG, FILL), layoutGrow, layoutPositioning
 - Grid child: span, anchor index, alignment
 
-**GRID IMPORTANT:** Setting layoutMode='GRID' only configures the container. Children do NOT auto-place — you MUST explicitly set gridColumnAnchorIndex + gridRowAnchorIndex on each child to position them in the grid. Without anchors, all children stack at cell (0,0). Typical workflow:
+**Grid positioning:** Setting layoutMode='GRID' only configures the container. Children don't auto-place — set gridColumnAnchorIndex + gridRowAnchorIndex on each child to position them in the grid. Without anchors, all children stack at cell (0,0). Typical workflow:
 1. Set container: layoutMode='GRID', gridColumnCount, gridRowSizes/gridColumnSizes, gap
 2. Set each child: gridColumnAnchorIndex, gridRowAnchorIndex (and optionally gridColumnSpan/gridRowSpan)
 

@@ -1597,11 +1597,14 @@ figma.ui.onmessage = async (msg) => {
         throw new Error('Node not found: ' + msg.nodeId);
       }
 
-      if (!('resize' in node)) {
+      if (!('resize' in node) && !('resizeWithoutConstraints' in node)) {
         throw new Error('Node type ' + node.type + ' does not support resize');
       }
 
-      if (msg.withConstraints) {
+      // SectionNode only supports resizeWithoutConstraints (no resize method)
+      if (node.type === 'SECTION') {
+        node.resizeWithoutConstraints(msg.width, msg.height);
+      } else if (msg.withConstraints) {
         node.resize(msg.width, msg.height);
       } else {
         node.resizeWithoutConstraints(msg.width, msg.height);
@@ -2070,9 +2073,16 @@ figma.ui.onmessage = async (msg) => {
         node.textCase = msg.textCase;
       }
 
-      // Apply text style ID (bind/detach)
+      // Apply text style ID (bind/detach) — resolve library keys via importStyleByKeyAsync
       if (msg.textStyleId !== undefined) {
-        await node.setTextStyleIdAsync(msg.textStyleId);
+        var _textStyleId = msg.textStyleId;
+        if (_textStyleId !== '') {
+          var _styleKey = null;
+          if (_textStyleId.startsWith('S:')) _styleKey = _textStyleId.split(',')[0].substring(2);
+          else if (/^[a-f0-9]{40}$/i.test(_textStyleId)) _styleKey = _textStyleId;
+          if (_styleKey) { try { var _imported = await figma.importStyleByKeyAsync(_styleKey); _textStyleId = _imported.id; } catch(e) {} }
+        }
+        await node.setTextStyleIdAsync(_textStyleId);
       }
 
       // Apply variable bindings to text properties (fontSize, fontFamily, lineHeight, etc.)
@@ -2318,9 +2328,28 @@ figma.ui.onmessage = async (msg) => {
       var format = msg.format || 'PNG';
       var scale = msg.scale || 2;
 
+      // Auto-downscale large nodes to prevent >5MB failures
+      // Figma caps at 4096px per dimension; estimate raw size and reduce scale if needed
+      var nodeWidth = ('width' in node) ? node.width : 0;
+      var nodeHeight = ('height' in node) ? node.height : 0;
+      var effectiveScale = scale;
+      if (nodeWidth > 0 && nodeHeight > 0) {
+        var maxDim = Math.max(nodeWidth * scale, nodeHeight * scale);
+        // Cap at 4096px (Figma's internal limit) and 5MB raw estimate (w*h*4 bytes at scale)
+        var rawEstimate = (nodeWidth * effectiveScale) * (nodeHeight * effectiveScale) * 4;
+        var MAX_RAW_BYTES = 5 * 1024 * 1024; // 5MB
+        if (maxDim > 4096 || rawEstimate > MAX_RAW_BYTES) {
+          var scaleForDim = 4096 / Math.max(nodeWidth, nodeHeight);
+          var scaleForSize = Math.sqrt(MAX_RAW_BYTES / (nodeWidth * nodeHeight * 4));
+          effectiveScale = Math.min(scaleForDim, scaleForSize, scale);
+          effectiveScale = Math.max(0.25, Math.round(effectiveScale * 100) / 100); // floor to 0.25 min
+          if (DEBUG) console.log('🌉 [Desktop Bridge] Auto-downscaled from', scale, 'to', effectiveScale, 'for', nodeWidth, 'x', nodeHeight, 'node');
+        }
+      }
+
       var exportSettings = {
         format: format,
-        constraint: { type: 'SCALE', value: scale }
+        constraint: { type: 'SCALE', value: effectiveScale }
       };
 
       // Export the node
@@ -2344,7 +2373,9 @@ figma.ui.onmessage = async (msg) => {
         image: {
           base64: base64,
           format: format,
-          scale: scale,
+          scale: effectiveScale,
+          requestedScale: scale,
+          autoDownscaled: effectiveScale < scale,
           byteLength: bytes.length,
           node: {
             id: node.id,
@@ -2454,26 +2485,42 @@ figma.ui.onmessage = async (msg) => {
       for (var propName in propUpdates) {
         var newValue = propUpdates[propName];
 
-        // Check if this exact property name exists
+        // For INSTANCE_SWAP properties: if the value looks like a component key (40-char hex or S: prefix),
+        // import the component by key and use its local ID instead
+        var resolvedPropName = null;
+        // Find the actual property (exact match or suffixed)
         if (currentProps[propName] !== undefined) {
-          propsToSet[propName] = newValue;
-          if (DEBUG) console.log('🌉 [Desktop Bridge] Setting property:', propName, '=', newValue);
+          resolvedPropName = propName;
         } else {
-          // Try to find a matching property with a suffix (for TEXT/BOOLEAN/INSTANCE_SWAP)
-          var foundMatch = false;
           for (var existingProp in currentProps) {
-            // Check if this is the base property name with a node ID suffix
             if (existingProp.startsWith(propName + '#')) {
-              propsToSet[existingProp] = newValue;
-              if (DEBUG) console.log('🌉 [Desktop Bridge] Found suffixed property:', existingProp, '=', newValue);
-              foundMatch = true;
+              resolvedPropName = existingProp;
               break;
             }
           }
+        }
 
-          if (!foundMatch) {
-            console.warn('🌉 [Desktop Bridge] Property not found:', propName, '- Available:', Object.keys(currentProps).join(', '));
+        if (resolvedPropName) {
+          var propDef = currentProps[resolvedPropName];
+          // Resolve component keys for INSTANCE_SWAP properties
+          if (propDef && propDef.type === 'INSTANCE_SWAP' && typeof newValue === 'string') {
+            var _compKey = null;
+            if (newValue.startsWith('S:')) _compKey = newValue.split(',')[0].substring(2);
+            else if (/^[a-f0-9]{40}$/i.test(newValue)) _compKey = newValue;
+            if (_compKey) {
+              try {
+                var _importedComp = await figma.importComponentByKeyAsync(_compKey);
+                newValue = _importedComp.id;
+                if (DEBUG) console.log('🌉 [Desktop Bridge] Resolved INSTANCE_SWAP key to local ID:', newValue);
+              } catch(e) {
+                console.warn('🌉 [Desktop Bridge] Failed to import component by key:', _compKey, e);
+              }
+            }
           }
+          propsToSet[resolvedPropName] = newValue;
+          if (DEBUG) console.log('🌉 [Desktop Bridge] Setting property:', resolvedPropName, '=', newValue);
+        } else {
+          console.warn('🌉 [Desktop Bridge] Property not found:', propName, '- Available:', Object.keys(currentProps).join(', '));
         }
       }
 

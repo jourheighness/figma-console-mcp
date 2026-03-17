@@ -468,19 +468,13 @@ Verbosity levels:
 		"figma_instantiate_component",
 		`Create an instance of a component from the design system.
 
-**CRITICAL: Always pass BOTH componentKey AND nodeId together!**
-Search results return both identifiers. Pass both so the tool can automatically fall back to nodeId if the component isn't published to a library. Most local/unpublished components require nodeId.
+Pass both componentKey and nodeId together — search results return both identifiers. The tool falls back to nodeId if the component isn't published to a library. Most local/unpublished components require nodeId.
 
-**COMPONENT SET KEYS:** Both component keys AND componentSet keys work. When passing a componentSet key (from figma_get_library_components), the tool imports the set and picks a variant automatically. Use the \`variant\` param to select a specific variant (e.g., \`{ Type: "Elevated" }\`). Without \`variant\`, the default variant is used.
+**Component set keys:** Both component keys and componentSet keys work. When passing a componentSet key (from figma_get_library_components), the tool imports the set and picks a variant automatically. Use the \`variant\` param to select a specific variant (e.g., \`{ Type: "Elevated" }\`). Without \`variant\`, the default variant is used.
 
-**IMPORTANT: Always re-search before instantiating!**
-NodeIds are session-specific and may be stale from previous conversations. ALWAYS search for components at the start of each design session to get current, valid identifiers.
+Search for components at the start of each design session to get current identifiers — node IDs are session-specific and may be stale from previous conversations.
 
-**OVERRIDE LIMITATIONS:**
-The overrides param handles TEXT and BOOLEAN properties only. For INSTANCE_SWAP overrides, call figma_set_instance_properties after instantiation.
-
-**VISUAL VALIDATION WORKFLOW:**
-After instantiating components, use figma_screenshot to verify the result looks correct. Check placement, sizing, and visual balance.`,
+**Override limitations:** The overrides param handles TEXT and BOOLEAN properties only. For INSTANCE_SWAP overrides, call figma_set_instance_properties after instantiation.`,
 		{
 			componentKey: z
 				.string()
@@ -492,7 +486,7 @@ After instantiating components, use figma_screenshot to verify the result looks 
 				.string()
 				.optional()
 				.describe(
-					"The node ID from search results. ALWAYS pass this alongside componentKey - most local components need it.",
+					"The node ID from search results. Pass this alongside componentKey — most local components need it.",
 				),
 			variant: z
 				.record(z.string())
@@ -960,12 +954,38 @@ for (const variant of variants) {
 	clonedVariants.push(clone);
 }
 
+// Snapshot child strokes before combining (combineAsVariants may strip them)
+const _strokeSnapshots = {};
+for (const clone of clonedVariants) {
+	if (clone.strokes && clone.strokes.length > 0) {
+		_strokeSnapshots[clone.name] = {
+			strokes: JSON.parse(JSON.stringify(clone.strokes)),
+			strokeWeight: typeof clone.strokeWeight === 'number' ? clone.strokeWeight : 1,
+			strokeAlign: clone.strokeAlign || 'INSIDE',
+			dashPattern: clone.dashPattern ? [...clone.dashPattern] : []
+		};
+	}
+}
+
 // Delete the old component set
 componentSet.remove();
 
 // Recreate using figma.combineAsVariants() for native purple dashed frame
 const newComponentSet = figma.combineAsVariants(clonedVariants, page);
 newComponentSet.name = csOriginalName;
+
+// Restore strokes that combineAsVariants may have stripped from child components
+for (const child of newComponentSet.children) {
+	if (child.type === 'COMPONENT' && _strokeSnapshots[child.name]) {
+		const snap = _strokeSnapshots[child.name];
+		if (snap.strokes.length > 0) {
+			child.strokes = snap.strokes;
+			if (typeof snap.strokeWeight === 'number') child.strokeWeight = snap.strokeWeight;
+			if (snap.strokeAlign) child.strokeAlign = snap.strokeAlign;
+			if (snap.dashPattern.length > 0) child.dashPattern = snap.dashPattern;
+		}
+	}
+}
 
 // Apply purple dashed border (Figma's native component set styling)
 newComponentSet.strokes = [{
@@ -1405,14 +1425,14 @@ return {
 		"figma_combine_as_variants",
 		`Combine individual COMPONENT nodes into a COMPONENT_SET (variant group). This is the Figma equivalent of "Combine as Variants" from the right-click menu.
 
-Each component MUST have a name following the variant naming convention: "Property1=Value1, Property2=Value2" (e.g. "Size=Small, State=Default"). Figma parses these names to create the variant properties.
+Each component needs a name following the variant naming convention: "Property1=Value1, Property2=Value2" (e.g. "Size=Small, State=Default"). Figma parses these names to create the variant properties.
 
 Steps:
 1. Create individual COMPONENT nodes with figma_create_nodes (use nodeType: "COMPONENT")
 2. Name each component with variant property syntax (e.g. "Size=Small, State=Default")
 3. Call this tool with all component IDs to combine them into a COMPONENT_SET
 
-The resulting COMPONENT_SET gets Figma's native purple dashed border and proper variant property definitions.`,
+The resulting COMPONENT_SET gets Figma's native purple dashed border and proper variant property definitions. Stroke properties on child components are preserved through the combine operation.`,
 		{
 			componentIds: jsonArray(z.array(z.string().describe("Node ID of a COMPONENT to include"))).describe("Array of COMPONENT node IDs to combine. Must be ≥ 2 components."),
 			name: z.string().optional().describe("Name for the component set (default: derived from first component name, stripping variant suffixes)"),
@@ -1445,10 +1465,39 @@ for (var i = 0; i < ids.length; i++) {
 
 // All components must share the same parent
 var parent = components[0].parent;
+
+// Snapshot child strokes before combining (combineAsVariants may strip them)
+var _strokeSnaps = {};
+for (var s = 0; s < components.length; s++) {
+	var comp = components[s];
+	if (comp.strokes && comp.strokes.length > 0) {
+		_strokeSnaps[comp.name] = {
+			strokes: JSON.parse(JSON.stringify(comp.strokes)),
+			strokeWeight: typeof comp.strokeWeight === 'number' ? comp.strokeWeight : 1,
+			strokeAlign: comp.strokeAlign || 'INSIDE',
+			dashPattern: comp.dashPattern ? Array.from(comp.dashPattern) : []
+		};
+	}
+}
+
 var componentSet = figma.combineAsVariants(components, parent);
 
 if (setName) {
 	componentSet.name = setName;
+}
+
+// Restore strokes that combineAsVariants may have stripped from child components
+for (var r = 0; r < componentSet.children.length; r++) {
+	var child = componentSet.children[r];
+	if (child.type === 'COMPONENT' && _strokeSnaps[child.name]) {
+		var snap = _strokeSnaps[child.name];
+		if (snap.strokes.length > 0) {
+			child.strokes = snap.strokes;
+			if (typeof snap.strokeWeight === 'number') child.strokeWeight = snap.strokeWeight;
+			if (snap.strokeAlign) child.strokeAlign = snap.strokeAlign;
+			if (snap.dashPattern.length > 0) child.dashPattern = snap.dashPattern;
+		}
+	}
 }
 
 // Apply Figma's native purple dashed border

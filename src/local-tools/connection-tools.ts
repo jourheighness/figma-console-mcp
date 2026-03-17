@@ -247,7 +247,7 @@ Actions:
 	server.tool(
 		"figma_connection",
 		`Manage the Figma connection, navigate to files, and control the environment. Actions:
-- navigate: Open a Figma URL or switch to a connected file. ALWAYS use this first when starting a session or switching files. Initializes browser connection and console monitoring.
+- navigate: Open a Figma URL or switch to a connected file. Use this first when starting a session or switching files. Initializes browser connection and console monitoring.
 - status: Check transport health, active file, and connection details.
 - reconnect: Force reconnection to Figma Desktop (CDP or WebSocket). Clears stale connector cache.
 - invalidate_cache: Force-rebuild all cache layers for a file (disk, session, variables). Use when cached context is stale.
@@ -672,7 +672,7 @@ Actions:
 													? `Server is running on fallback port ${wsActualPort} (port ${wsPreferredPort} was taken by another instance). The Desktop Bridge plugin is not connected — most likely because the plugin has old code that only scans port ${wsPreferredPort}. TELL THE USER: Re-import the Desktop Bridge plugin in Figma (Plugins → Development → Import plugin from manifest) to update it with multi-port scanning support. This is a one-time step.${pluginPath ? ' The manifest file is at: ' + pluginPath : ''}`
 													: `No connection to Figma Desktop. The easiest option is to open the Desktop Bridge plugin in Figma. Alternatively, relaunch Figma with --remote-debugging-port=9222 for CDP.${pluginPath ? ' Plugin manifest: ' + pluginPath : ''}`
 											: activeTransport === "websocket"
-												? `Connected via WebSocket Bridge to "${currentFileName || "unknown file"}" on port ${wsActualPort}. All design tools and console monitoring tools are available. Console logs are captured from the plugin sandbox (code.js). For full-page console monitoring including Figma app internals, add CDP (--remote-debugging-port=9222). IMPORTANT: Always verify the file name before destructive operations when multiple files have the plugin open.`
+												? `Connected via WebSocket Bridge to "${currentFileName || "unknown file"}" on port ${wsActualPort}. All design tools and console monitoring tools are available. Console logs are captured from the plugin sandbox (code.js). For full-page console monitoring including Figma app internals, add CDP (--remote-debugging-port=9222). Verify the file name before destructive operations when multiple files have the plugin open.`
 												: availablePages.length > 1
 													? `Multiple Figma pages detected. Current page has ${monitorStatus?.workerCount || 0} workers.`
 													: "All tools are ready to use.",
@@ -1079,7 +1079,7 @@ THE primary read tool. Use this instead of get_selection, edit_node(inspect), or
 
 Children >20 are truncated to first 10 with a childCount and hint. COMPONENT_SET variants >20 show first 20 with variantsTruncated flag.
 
-IMPORTANT — two DIFFERENT binding systems in the output:
+Two different binding systems in the output:
 1. Variable bindings (vars/varIds): individual design tokens bound to specific properties via Figma's Variables feature. Root node shows resolved "collection/variable-name" in 'vars'. Children show raw IDs in 'varIds' — cross-reference with figma_get_variables if you need names. Example: vars: { fills: "Colors/Primary", itemSpacing: "Spacing/md" }. To bind: use figma_set_appearance/figma_set_text/figma_set_layout with variableBindings param.
 2. Style bindings (fillStyleId/strokeStyleId/textStyleId/effectStyleId): references to reusable style PRESETS that bundle multiple properties. A textStyleId sets font+size+weight+lineHeight together. A fillStyleId sets the entire fill stack. These are Figma Styles, not Variables. To apply: use figma_set_text textStyleId param or figma_set_appearance fillStyleId param.
 These are independent — a node can have BOTH a textStyleId (typography preset) AND variable bindings on individual fills.
